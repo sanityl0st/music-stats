@@ -1,0 +1,253 @@
+# backend/app/main.py
+import json
+import random
+from datetime import datetime, timedelta
+from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from sqlalchemy import func, desc
+from .database import engine, Base, get_db
+from .models import Artist, Album, Track, StreamHistory, PhysicalItem
+from .services.parser import ingest_library_xml, ingest_play_activity_csv, get_or_create_entities
+from .services.apple_api import enrich_missing_artwork, fetch_album_metadata_and_tracks
+from enum import Enum
+
+class TimeFrame(str, Enum):
+    all = "all"
+    month = "month"
+    week = "week"
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="Vinyl Stats API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class PhysicalItemCreate(BaseModel):
+    artist: str
+    title: str
+    format: str  # "VINYL", "CD", or "CASSETTE"
+
+@app.post("/api/sync/upload-xml")
+async def upload_library_xml(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename.endswith(".xml"):
+        raise HTTPException(status_code=400, detail="Please upload an Apple Music Library.xml file")
+    content = await file.read()
+    res = ingest_library_xml(db, content)
+    await enrich_missing_artwork(db, limit=25)
+    return res
+
+@app.post("/api/sync/upload-csv")
+async def upload_activity_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload Apple Music Play Activity.csv")
+    res = ingest_play_activity_csv(db, file.file)
+    await enrich_missing_artwork(db, limit=25)
+    return res
+
+@app.post("/api/sync/seed-mock")
+async def seed_mock_data(db: Session = Depends(get_db)):
+    """Seeds sample listening history across the past 45 days + physical shelf items."""
+    sample_catalog = [
+        ("Lil Uzi Vert", "Eternal Atake", "Baby Pluto", 210000),
+        ("Daft Punk", "Random Access Memories", "Giorgio by Moroder", 544000),
+        ("Kendrick Lamar", "good kid, m.A.A.d city", "Money Trees", 386000),
+        ("Tame Impala", "Currents", "Let It Happen", 467000),
+        ("Frank Ocean", "Blonde", "Nights", 307000),
+        ("Radiohead", "In Rainbows", "Weird Fishes/ Arpeggi", 318000),
+        ("Tyler, The Creator", "IGOR", "EARFQUAKE", 190000),
+        ("Deftones", "White Pony", "Change (In the House of Flies)", 300000),
+    ]
+
+    tracks = []
+    for artist_name, album_title, track_title, duration_ms in sample_catalog:
+        _, _, track = get_or_create_entities(db, artist_name, album_title, track_title, duration_ms)
+        tracks.append(track)
+
+    now = datetime.utcnow()
+    added = 0
+    for i in range(300):
+        t = random.choice(tracks)
+        played_at = now - timedelta(hours=i * 3, minutes=random.randint(1, 50))
+        exists = db.query(StreamHistory).filter_by(track_id=t.id, played_at=played_at).first()
+        if not exists:
+            db.add(StreamHistory(
+                track_id=t.id,
+                played_at=played_at,
+                duration_played_ms=t.duration_ms,
+                end_reason="NATURAL_END_OF_TRACK",
+                source="MOCK_SEED"
+            ))
+            added += 1
+
+    db.commit()
+    art_res = await enrich_missing_artwork(db, limit=20)
+
+    # Seed initial physical shelf items if empty
+    if db.query(func.count(PhysicalItem.id)).scalar() == 0:
+        starter_shelf = [
+            ("Lil Uzi Vert", "Eternal Atake", "VINYL"),
+            ("Daft Punk", "Discovery", "VINYL"),
+            ("Deftones", "Around the Fur", "CD"),
+            ("Radiohead", "OK Computer", "CD"),
+            ("MF DOOM", "MM..FOOD", "CASSETTE"),
+            ("Kendrick Lamar", "DAMN.", "VINYL"),
+        ]
+        for artist, title, fmt in starter_shelf:
+            meta = await fetch_album_metadata_and_tracks(artist, title)
+            db.add(PhysicalItem(format=fmt, **meta))
+        db.commit()
+
+    return {"status": "seeded", "mock_streams_added": added, **art_res}
+
+@app.get("/api/stats/overview")
+def get_stats_overview(
+    timeframe: TimeFrame = TimeFrame.all,
+    db: Session = Depends(get_db)
+):
+    """Returns stats filtered by timeframe: 'all', 'month' (last 30d), or 'week' (last 7d)."""
+    stream_count = db.query(func.count(StreamHistory.id)).scalar() or 0
+    use_streams = stream_count > 0
+
+    cutoff = None
+    if timeframe == "week":
+        cutoff = datetime.utcnow() - timedelta(days=7)
+    elif timeframe == "month":
+        cutoff = datetime.utcnow() - timedelta(days=30)
+
+    stream_filter = [StreamHistory.played_at >= cutoff] if (use_streams and cutoff) else []
+
+    if use_streams:
+        total_ms = db.query(func.sum(StreamHistory.duration_played_ms)).filter(*stream_filter).scalar() or 0
+        filtered_streams = db.query(func.count(StreamHistory.id)).filter(*stream_filter).scalar() or 0
+    else:
+        total_ms = db.query(func.sum(Track.duration_ms * Track.library_play_count)).scalar() or 0
+        filtered_streams = 0
+
+    play_metric = func.count(StreamHistory.id) if use_streams else func.sum(Track.library_play_count)
+    time_metric = func.sum(StreamHistory.duration_played_ms) if use_streams else func.sum(Track.duration_ms * Track.library_play_count)
+
+    # Top Artists
+    artist_q = db.query(
+        Artist.id, Artist.name, Artist.artwork_url,
+        play_metric.label("play_count"), time_metric.label("total_ms")
+    ).join(Track, Track.artist_id == Artist.id)
+    if use_streams:
+        artist_q = artist_q.join(StreamHistory, StreamHistory.track_id == Track.id).filter(*stream_filter)
+    top_artists = artist_q.group_by(Artist.id).order_by(desc("total_ms")).limit(15).all()
+
+    # Top Albums
+    album_q = db.query(
+        Album.id, Album.title, Album.artwork_url, Artist.name.label("artist_name"),
+        play_metric.label("play_count"), time_metric.label("total_ms")
+    ).join(Artist, Album.artist_id == Artist.id).join(Track, Track.album_id == Album.id)
+    if use_streams:
+        album_q = album_q.join(StreamHistory, StreamHistory.track_id == Track.id).filter(*stream_filter)
+    top_albums = album_q.group_by(Album.id, Artist.name).order_by(desc("total_ms")).limit(15).all()
+
+    # Top Tracks
+    track_q = db.query(
+        Track.id, Track.title, Artist.name.label("artist_name"),
+        Album.title.label("album_title"), Album.artwork_url,
+        play_metric.label("play_count"), time_metric.label("total_ms")
+    ).join(Artist, Track.artist_id == Artist.id).outerjoin(Album, Track.album_id == Album.id)
+    if use_streams:
+        track_q = track_q.join(StreamHistory, StreamHistory.track_id == Track.id).filter(*stream_filter)
+    top_tracks = track_q.group_by(Track.id, Artist.name, Album.title, Album.artwork_url).order_by(desc("total_ms")).limit(20).all()
+
+    # Recent Streams Log
+    recent_q = (
+        db.query(StreamHistory, Track, Artist, Album)
+        .join(Track, StreamHistory.track_id == Track.id)
+        .join(Artist, Track.artist_id == Artist.id)
+        .outerjoin(Album, Track.album_id == Album.id)
+        .order_by(desc(StreamHistory.played_at))
+        .limit(25)
+        .all()
+    )
+
+    return {
+        "timeframe": timeframe,
+        "total_streams": filtered_streams,
+        "total_minutes_listened": round(total_ms / 60000, 1),
+        "total_hours_listened": round(total_ms / 3600000, 1),
+        "total_artists": db.query(func.count(Artist.id)).scalar() or 0,
+        "total_albums": db.query(func.count(Album.id)).scalar() or 0,
+        "total_tracks": db.query(func.count(Track.id)).scalar() or 0,
+        "top_artists": [
+            {"id": a.id, "name": a.name, "artwork_url": a.artwork_url, "play_count": a.play_count or 0, "minutes": round((a.total_ms or 0) / 60000, 1)}
+            for a in top_artists
+        ],
+        "top_albums": [
+            {"id": al.id, "title": al.title, "artist": al.artist_name, "artwork_url": al.artwork_url, "play_count": al.play_count or 0, "minutes": round((al.total_ms or 0) / 60000, 1)}
+            for al in top_albums
+        ],
+        "top_tracks": [
+            {"id": t.id, "title": t.title, "artist": t.artist_name, "album": t.album_title, "artwork_url": t.artwork_url, "play_count": t.play_count or 0, "minutes": round((t.total_ms or 0) / 60000, 1)}
+            for t in top_tracks
+        ],
+        "recent_streams": [
+            {
+                "id": sh.id,
+                "track": tr.title,
+                "artist": ar.name,
+                "album": al.title if al else "Single",
+                "artwork_url": al.artwork_url if al else None,
+                "played_at": sh.played_at.isoformat()
+            }
+            for sh, tr, ar, al in recent_q
+        ]
+    }
+
+# --- PHYSICAL COLLECTION ENDPOINTS ---
+
+@app.get("/api/collection")
+def get_physical_collection(db: Session = Depends(get_db)):
+    items = db.query(PhysicalItem).order_by(PhysicalItem.title.asc()).all()
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "artist": item.artist,
+            "format": item.format,
+            "artwork_url": item.artwork_url,
+            "apple_music_url": item.apple_music_url,
+            "spotify_url": item.spotify_url,
+            "tracks": json.loads(item.tracklist_json or "[]"),
+        }
+        for item in items
+    ]
+
+@app.post("/api/collection")
+async def add_physical_item(payload: PhysicalItemCreate, db: Session = Depends(get_db)):
+    meta = await fetch_album_metadata_and_tracks(payload.artist, payload.title)
+    item = PhysicalItem(format=payload.format.upper(), **meta)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {
+        "id": item.id,
+        "title": item.title,
+        "artist": item.artist,
+        "format": item.format,
+        "artwork_url": item.artwork_url,
+        "apple_music_url": item.apple_music_url,
+        "spotify_url": item.spotify_url,
+        "tracks": json.loads(item.tracklist_json or "[]"),
+    }
+
+@app.delete("/api/collection/{item_id}")
+def delete_physical_item(item_id: int, db: Session = Depends(get_db)):
+    item = db.query(PhysicalItem).filter(PhysicalItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    db.delete(item)
+    db.commit()
+    return {"status": "deleted"}

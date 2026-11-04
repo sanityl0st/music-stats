@@ -1,0 +1,15 @@
+# Python & Data Archives
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+backend/data/*
+!backend/data/.gitkeep
+*.db
+*.sqlite3
+
+# Node / Frontend
+node_modules/
+dist/
+.env
+.env.local
