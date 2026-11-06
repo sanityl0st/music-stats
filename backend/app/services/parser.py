@@ -3,6 +3,8 @@ import plistlib
 import pandas as pd
 from sqlalchemy.orm import Session
 from ..models import Artist, Album, Track, StreamHistory
+import json
+from datetime import datetime
 
 MIN_STREAM_MS = 30_000  # 30-second threshold matching stats.fm
 
@@ -129,3 +131,53 @@ def ingest_play_activity_csv(db: Session, csv_file) -> dict:
 
     db.commit()
     return {"status": "success", "streams_added": streams_added}
+
+
+def ingest_spotify_json(db: Session, json_bytes: bytes) -> dict:
+    """Parses both Spotify 'Extended Streaming History' and standard 'Account Data' JSON files."""
+    records = json.loads(json_bytes.decode("utf-8"))
+    if not isinstance(records, list):
+        raise ValueError("Expected a JSON array of Spotify stream events.")
+
+    streams_added = 0
+    for row in records:
+        # Support both Extended ('ms_played', 'master_metadata_track_name') and Standard ('msPlayed', 'trackName')
+        duration_ms = int(row.get("ms_played") or row.get("msPlayed") or 0)
+        if duration_ms < MIN_STREAM_MS:
+            continue
+
+        track_title = row.get("master_metadata_track_name") or row.get("trackName")
+        artist_name = row.get("master_metadata_album_artist_name") or row.get("artistName")
+        album_title = row.get("master_metadata_album_album_name") or row.get("albumName") or "Unknown Album"
+        ts_str = row.get("ts") or row.get("endTime")
+
+        if not track_title or not artist_name or not ts_str:
+            continue
+
+        try:
+            played_at = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            try:
+                played_at = datetime.strptime(ts_str, "%Y-%m-%d %H:%M")
+            except ValueError:
+                continue
+
+        _, _, track = get_or_create_entities(db, artist_name, album_title, track_title, duration_ms)
+
+        exists = db.query(StreamHistory).filter(
+            StreamHistory.track_id == track.id,
+            StreamHistory.played_at == played_at
+        ).first()
+
+        if not exists:
+            db.add(StreamHistory(
+                track_id=track.id,
+                played_at=played_at,
+                duration_played_ms=duration_ms,
+                end_reason=row.get("reason_end", "SPOTIFY_STREAM"),
+                source="SPOTIFY_IMPORT"
+            ))
+            streams_added += 1
+
+    db.commit()
+    return {"status": "success", "source": "spotify_json", "streams_added": streams_added}

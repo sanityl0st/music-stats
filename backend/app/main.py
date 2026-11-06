@@ -12,6 +12,16 @@ from .models import Artist, Album, Track, StreamHistory, PhysicalItem
 from .services.parser import ingest_library_xml, ingest_play_activity_csv, get_or_create_entities
 from .services.apple_api import enrich_missing_artwork, fetch_album_metadata_and_tracks
 from enum import Enum
+import os
+from fastapi import Header
+from .services.parser import ingest_library_xml, ingest_play_activity_csv, ingest_spotify_json, get_or_create_entities
+
+# Defaults to empty string locally (unlocked for easy local use); set ADMIN_SECRET in production!
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+
+def verify_admin(x_admin_key: str = Header(default="")):
+    if ADMIN_SECRET and x_admin_key != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid or missing Admin Key. Read-only mode active.")
 
 class TimeFrame(str, Enum):
     all = "all"
@@ -225,7 +235,7 @@ def get_physical_collection(db: Session = Depends(get_db)):
         for item in items
     ]
 
-@app.post("/api/collection")
+@app.post("/api/collection", dependencies=[Depends(verify_admin)])
 async def add_physical_item(payload: PhysicalItemCreate, db: Session = Depends(get_db)):
     meta = await fetch_album_metadata_and_tracks(payload.artist, payload.title)
     item = PhysicalItem(format=payload.format.upper(), **meta)
@@ -243,7 +253,7 @@ async def add_physical_item(payload: PhysicalItemCreate, db: Session = Depends(g
         "tracks": json.loads(item.tracklist_json or "[]"),
     }
 
-@app.delete("/api/collection/{item_id}")
+@app.delete("/api/collection/{item_id}", dependencies=[Depends(verify_admin)])
 def delete_physical_item(item_id: int, db: Session = Depends(get_db)):
     item = db.query(PhysicalItem).filter(PhysicalItem.id == item_id).first()
     if not item:
@@ -251,3 +261,84 @@ def delete_physical_item(item_id: int, db: Session = Depends(get_db)):
     db.delete(item)
     db.commit()
     return {"status": "deleted"}
+
+# backend/app/main.py (Append to the bottom of the file)
+
+@app.post("/api/collection/seed-bulk")
+def seed_bulk_collection(count: int = 220, db: Session = Depends(get_db)):
+    """Instantly seeds 220+ physical items to stress-test infinite 3D shelf scrolling."""
+    base_catalog = [
+        ("Lil Uzi Vert", "Eternal Atake", "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/8c/31/6d/8c316d0b-8b9f-9a25-4c9a-3f5c4176158b/20UMGIM15985.rgb.jpg/1000x1000bb.jpg"),
+        ("Daft Punk", "Random Access Memories", "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/e2/62/f8/e262f8c7-6273-4f88-b6a5-61096a95b37f/886443919266.jpg/1000x1000bb.jpg"),
+        ("Kendrick Lamar", "good kid, m.A.A.d city", "https://is1-ssl.mzstatic.com/image/thumb/Music122/v4/ca/5b/c0/ca5bc0b3-d8b6-96c6-7223-a0d6a4c288d0/12UMGIM52990.rgb.jpg/1000x1000bb.jpg"),
+        ("Tame Impala", "Currents", "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/f6/97/2a/f6972a5d-074a-9f88-5891-4d4a6539c113/15UMGIM23312.rgb.jpg/1000x1000bb.jpg"),
+        ("Frank Ocean", "Blonde", "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/c9/95/57/c9955727-79fb-2970-7646-32e1d57407f9/859718120285_cover.jpg/1000x1000bb.jpg"),
+        ("Radiohead", "In Rainbows", "https://is1-ssl.mzstatic.com/image/thumb/Music126/v4/dd/50/c7/dd50c790-99b3-c32c-414b-a132c9674736/634904032463.png/1000x1000bb.jpg"),
+        ("Tyler, The Creator", "IGOR", "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/0c/f2/d0/0cf2d054-0b82-6c7b-3992-215d87e229a5/886447710180.jpg/1000x1000bb.jpg"),
+        ("Deftones", "White Pony", "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/a7/1b/49/a71b490c-0c4a-9452-24b4-093653780388/093624917397.jpg/1000x1000bb.jpg"),
+        ("MF DOOM", "MM..FOOD", "https://is1-ssl.mzstatic.com/image/thumb/Music124/v4/0a/87/2d/0a872d77-633c-3849-5f7e-32e3c825e188/826257005121.jpg/1000x1000bb.jpg"),
+        ("Fleetwood Mac", "Rumours", "https://is1-ssl.mzstatic.com/image/thumb/Music124/v4/4b/15/36/4b1536a7-71a4-7389-2437-d4e023309d30/081227970949.jpg/1000x1000bb.jpg"),
+        ("Pink Floyd", "The Dark Side of the Moon", "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/3c/74/05/3c7405d1-3428-9287-a759-b6d4a269a063/886445635829.jpg/1000x1000bb.jpg"),
+        ("The Strokes", "Is This It", "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/5f/4f/4e/5f4f4e4a-8c80-3a2c-414b-1645727d8d0a/078636804521.jpg/1000x1000bb.jpg"),
+    ]
+    formats = ["VINYL", "CD", "CASSETTE"]
+    editions = ["", " (Deluxe Edition)", " (Remastered)", " (Collector's Pressing)", " (Japan Import)", " (Anniversary LP)"]
+
+    sample_tracks = json.dumps([
+        {"number": 1, "title": "Intro / Side A Opening", "duration": "3:18"},
+        {"number": 2, "title": "Midnight Signal", "duration": "4:12"},
+        {"number": 3, "title": "Analog Dreams", "duration": "5:04"},
+        {"number": 4, "title": "Subspace Resonance", "duration": "3:49"},
+        {"number": 5, "title": "Side B Finale", "duration": "6:22"},
+    ])
+
+    new_items = []
+    for i in range(count):
+        artist, title, art_url = base_catalog[i % len(base_catalog)]
+        edition = editions[(i // len(base_catalog)) % len(editions)]
+        fmt = formats[i % len(formats)]
+        full_title = f"{title}{edition} #{i + 1}"
+
+        new_items.append(
+            PhysicalItem(
+                artist=artist,
+                title=full_title,
+                format=fmt,
+                artwork_url=art_url,
+                apple_music_url="https://music.apple.com",
+                spotify_url="https://open.spotify.com",
+                tracklist_json=sample_tracks,
+            )
+        )
+
+    db.bulk_save_objects(new_items)
+    db.commit()
+    total = db.query(func.count(PhysicalItem.id)).scalar() or 0
+    return {"status": "bulk_seeded", "added": count, "total_in_collection": total}
+
+@app.delete("/api/collection/clear/all")
+def clear_entire_collection(db: Session = Depends(get_db)):
+    """Clears the shelf so you can reset after stress testing."""
+    db.query(PhysicalItem).delete()
+    db.commit()
+    return {"status": "cleared"}
+
+
+@app.post("/api/sync/upload", dependencies=[Depends(verify_admin)])
+async def unified_sync_upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """User-friendly auto-detecting importer for Apple Music (.xml, .csv) and Spotify (.json)."""
+    filename = (file.filename or "").lower()
+    if filename.endswith(".xml"):
+        content = await file.read()
+        res = ingest_library_xml(db, content)
+    elif filename.endswith(".csv"):
+        res = ingest_play_activity_csv(db, file.file)
+    elif filename.endswith(".json"):
+        content = await file.read()
+        res = ingest_spotify_json(db, content)
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported file. Drop an Apple (.csv/.xml) or Spotify (.json) file.")
+
+    # Automatically fetch high-res cover art for newly imported albums
+    art = await enrich_missing_artwork(db, limit=30)
+    return {**res, **art}
