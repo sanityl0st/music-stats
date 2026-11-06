@@ -4,7 +4,7 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { Text, Edges } from '@react-three/drei'
 import * as THREE from 'three'
 import { ps2Audio } from '../../utils/ps2Audio'
-import { Disc, ExternalLink, Plus, Trash2, RotateCcw, Music } from 'lucide-react'
+import { Disc, ExternalLink, Plus, Trash2, RotateCcw, Music, Layers } from 'lucide-react'
 
 export interface PhysicalAlbum {
   id: number
@@ -18,18 +18,34 @@ export interface PhysicalAlbum {
 }
 
 const ITEMS_PER_ROW = 12
-const ROW_VERTICAL_GAP = 2.6
-const SPINE_HORIZONTAL_GAP = 0.42
+const ROW_VERTICAL_GAP = 2.4
+const SPINE_HORIZONTAL_GAP = 0.44
+
+// Shared texture cache so 200+ items don't create 200 redundant WebGL textures
+const textureCache = new Map<string, THREE.Texture>()
+const textureLoader = new THREE.TextureLoader()
+textureLoader.setCrossOrigin('anonymous')
+
+function getCachedTexture(url: string): THREE.Texture {
+  if (!textureCache.has(url)) {
+    const tex = textureLoader.load(url)
+    tex.colorSpace = THREE.SRGBColorSpace
+    textureCache.set(url, tex)
+  }
+  return textureCache.get(url)!
+}
 
 function AlbumCaseMesh({
   item,
   index,
+  scrollOffset,
   isSelected,
   anySelected,
   onSelect,
 }: {
   item: PhysicalAlbum
   index: number
+  scrollOffset: number
   isSelected: boolean
   anySelected: boolean
   onSelect: (item: PhysicalAlbum) => void
@@ -37,18 +53,11 @@ function AlbumCaseMesh({
   const groupRef = useRef<THREE.Group>(null)
   const [hovered, setHovered] = useState(false)
 
-  // Load cover art texture safely with fallback
-  const coverTexture = useMemo(() => {
-    const loader = new THREE.TextureLoader()
-    loader.setCrossOrigin('anonymous')
-    return loader.load(item.artwork_url)
-  }, [item.artwork_url])
-
-  // Realistic relative dimensions per physical format: [Depth (Front-to-Back), Height, Thickness (Spine)]
+  // Dimensions: [X = Narrow Spine Width, Y = Case Height, Z = Wide Cover Depth]
   const dims: [number, number, number] = useMemo(() => {
-    if (item.format === 'VINYL') return [1.65, 1.65, 0.08]
-    if (item.format === 'CASSETTE') return [0.75, 1.15, 0.18]
-    return [1.25, 1.25, 0.13] // CD Jewel Case
+    if (item.format === 'VINYL') return [0.11, 1.65, 1.65]
+    if (item.format === 'CASSETTE') return [0.22, 1.12, 0.78]
+    return [0.15, 1.28, 1.28] // CD Jewel Case
   }, [item.format])
 
   const row = Math.floor(index / ITEMS_PER_ROW)
@@ -57,33 +66,49 @@ function AlbumCaseMesh({
   const shelfY = -row * ROW_VERTICAL_GAP + (dims[1] - 1.65) / 2
   const shelfZ = 0
 
-  useFrame((state, delta) => {
-    if (!groupRef.current) return
+  // Viewport culling: check if this row is visible near the current scroll position
+  const currentRow = scrollOffset / ROW_VERTICAL_GAP
+  const isNearViewport = Math.abs(row - currentRow) <= 3.5 || isSelected
+
+  const coverTexture = useMemo(() => {
+    if (!isNearViewport) return null
+    return getCachedTexture(item.artwork_url)
+  }, [item.artwork_url, isNearViewport])
+
+  useFrame((state) => {
+    if (!groupRef.current || !isNearViewport) return
     const t = state.clock.elapsedTime
 
     if (isSelected) {
-      // Fly out to front-and-center of the camera, slowly spinning & bobbing
+      const xOffset = state.viewport.width < 5 ? 0 : -1.05
+      const yOffset = state.viewport.width < 5 ? 0.5 : 0
       const targetPos = new THREE.Vector3(
-        state.camera.position.x - 1.15,
-        state.camera.position.y + Math.sin(t * 2.2) * 0.07,
-        3.35
+        state.camera.position.x + xOffset,
+        state.camera.position.y + yOffset + Math.sin(t * 2.0) * 0.06,
+        3.25
       )
-      groupRef.current.position.lerp(targetPos, 0.08)
-      groupRef.current.rotation.y += delta * 0.75
-      groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, Math.sin(t * 1.4) * 0.08, 0.08)
+      groupRef.current.position.lerp(targetPos, 0.1)
+
+      // Rotate -90 deg (-PI/2) so the +X Front Cover faces the camera directly, plus a slow inspection sway
+      const targetRotY = -Math.PI / 2 + Math.sin(t * 0.75) * 0.45
+      groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, targetRotY, 0.08)
+      groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, Math.sin(t * 1.3) * 0.06, 0.08)
     } else {
-      // Sit spine-out on the shelf; pull up and forward slightly when hovered
-      const hoverLiftY = hovered && !anySelected ? 0.22 : 0
-      const hoverPullZ = hovered && !anySelected ? 0.45 : 0
+      const hoverLiftY = hovered && !anySelected ? 0.24 : 0
+      const hoverPullZ = hovered && !anySelected ? 0.52 : 0
       const targetPos = new THREE.Vector3(shelfX, shelfY + hoverLiftY, shelfZ + hoverPullZ)
 
-      groupRef.current.position.lerp(targetPos, 0.12)
-      groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, 0, 0.12)
-      groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, 0, 0.12)
+      groupRef.current.position.lerp(targetPos, 0.14)
+      // On shelf: rotation.y = 0 so +Z Spine faces camera directly
+      groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, 0, 0.14)
+      groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, 0, 0.14)
     }
   })
 
-  const spineColor = item.format === 'VINYL' ? '#1e1b18' : item.format === 'CD' ? '#0f172a' : '#27272a'
+  if (!isNearViewport) return null
+
+  const spineColor =
+    item.format === 'VINYL' ? '#1c1917' : item.format === 'CD' ? '#0f172a' : '#27272a'
 
   return (
     <group
@@ -109,27 +134,36 @@ function AlbumCaseMesh({
         }
       }}
     >
-      {/* 6-sided Case Mesh: Front & Back show Album Art; Spine faces +Z on the shelf */}
+      {/* BoxGeometry Face Mapping:
+          material-0 (+X Right Face) = FRONT ALBUM COVER ARTWORK
+          material-1 (-X Left Face)  = BACK ALBUM COVER ARTWORK
+          material-2 (+Y Top Edge)   = Vinyl/CD Top Edge
+          material-3 (-Y Bottom)     = Vinyl/CD Bottom Edge
+          material-4 (+Z Front Face) = SPINE (Solid color + Spine Text facing the user on shelf)
+          material-5 (-Z Back Edge)  = Inner Sleeve */}
       <mesh castShadow receiveShadow>
         <boxGeometry args={dims} />
-        <meshStandardMaterial attach="material-0" map={coverTexture} roughness={0.3} />
-        <meshStandardMaterial attach="material-1" map={coverTexture} roughness={0.3} />
-        <meshStandardMaterial attach="material-2" color={spineColor} roughness={0.6} />
-        <meshStandardMaterial attach="material-3" color={spineColor} roughness={0.6} />
-        <meshStandardMaterial attach="material-4" color={hovered ? '#14532d' : spineColor} roughness={0.4} />
-        <meshStandardMaterial attach="material-5" color="#09090b" roughness={0.5} />
+        <meshStandardMaterial attach="material-0" map={coverTexture} roughness={0.25} metalness={0.05} />
+        <meshStandardMaterial attach="material-1" map={coverTexture} roughness={0.25} metalness={0.05} />
+        <meshStandardMaterial attach="material-2" color="#d4d4d8" roughness={0.6} />
+        <meshStandardMaterial attach="material-3" color="#27272a" roughness={0.6} />
+        <meshStandardMaterial attach="material-4" color={hovered ? '#065f46' : spineColor} roughness={0.35} />
+        <meshStandardMaterial attach="material-5" color="#18181b" roughness={0.5} />
 
-        {/* PS2 Resident Evil Green Wireframe Highlight on Hover */}
-        {(hovered || isSelected) && <Edges scale={1.02} threshold={15} color="#4ade80" />}
+        <Edges
+          scale={1.01}
+          threshold={15}
+          color={hovered || isSelected ? '#4ade80' : '#3f3f46'}
+        />
       </mesh>
 
-      {/* Spine Label Text */}
+      {/* Spine Text sits exclusively on the narrow +Z spine face */}
       <Text
-        position={[0, 0, dims[2] / 2 + 0.006]}
+        position={[0, 0, dims[2] / 2 + 0.008]}
         rotation={[0, 0, -Math.PI / 2]}
-        fontSize={0.055}
-        maxWidth={dims[1] - 0.15}
-        color={hovered ? '#86efac' : '#d4d4d8'}
+        fontSize={0.052}
+        maxWidth={dims[1] - 0.14}
+        color={hovered ? '#ffffff' : '#a7f3d0'}
         anchorX="center"
         anchorY="middle"
       >
@@ -150,46 +184,73 @@ function ShelfEnvironment({
   selectedItem: PhysicalAlbum | null
   onSelect: (item: PhysicalAlbum) => void
 }) {
-  const totalRows = Math.max(3, Math.ceil(items.length / ITEMS_PER_ROW) + 1)
+  const flashlightRef = useRef<THREE.PointLight>(null)
+  const rigLightRef = useRef<THREE.DirectionalLight>(null)
+  const totalRows = Math.max(3, Math.ceil(items.length / ITEMS_PER_ROW))
 
   useFrame((state) => {
-    // Subtle mouse horizontal pan + smooth vertical scroll down the infinite shelf
     const targetX = selectedItem ? 0 : state.pointer.x * 1.15
-    const targetY = -scrollOffset + (selectedItem ? 0 : state.pointer.y * 0.25)
-    state.camera.position.x = THREE.MathUtils.lerp(state.camera.position.x, targetX, 0.06)
-    state.camera.position.y = THREE.MathUtils.lerp(state.camera.position.y, targetY, 0.08)
+    const targetY = -scrollOffset + (selectedItem ? 0 : state.pointer.y * 0.22)
+    state.camera.position.x = THREE.MathUtils.lerp(state.camera.position.x, targetX, 0.07)
+    state.camera.position.y = THREE.MathUtils.lerp(state.camera.position.y, targetY, 0.09)
+
+    // Move main key light with the camera so Row 20 is just as bright as Row 1
+    if (rigLightRef.current) {
+      rigLightRef.current.position.set(state.camera.position.x + 2, state.camera.position.y + 3, 7)
+    }
+
+    // Resident Evil cursor flashlight tracks mouse & vertical scroll
+    if (flashlightRef.current) {
+      flashlightRef.current.position.set(
+        state.camera.position.x + state.pointer.x * 3.5,
+        state.camera.position.y + state.pointer.y * 2.5,
+        3.8
+      )
+    }
   })
 
   return (
     <group>
-      <fog attach="fog" args={['#050806', 4, 14]} />
-      <ambientLight intensity={0.45} color="#a7f3d0" />
-      <spotLight position={[0, 3, 6]} intensity={22} angle={0.65} penumbra={0.8} color="#ecfdf5" />
-      <pointLight position={[-3, -2, 3]} intensity={6} color="#22c55e" />
+      {/* High-Visibility PS2 / Resident Evil Safe-Room Lighting */}
+      <fog attach="fog" args={['#07120c', 7, 22]} />
+      <ambientLight intensity={1.9} color="#ecfdf5" />
+      <hemisphereLight args={['#a7f3d0', '#1c1917', 1.6]} />
+      <directionalLight ref={rigLightRef} position={[2, 3, 7]} intensity={3.2} color="#ffffff" />
+      <pointLight ref={flashlightRef} intensity={18} distance={10} decay={1.4} color="#fef08a" />
 
-      {/* Render Wooden/Metal Shelf Planks for each row */}
+      {/* Render Shelf Planks for every row */}
       {Array.from({ length: totalRows }).map((_, rIdx) => (
         <group key={rIdx} position={[0, -rIdx * ROW_VERTICAL_GAP - 0.9, -0.1]}>
-          {/* Horizontal Shelf Plank */}
+          {/* Shelf Horizontal Plank */}
           <mesh receiveShadow>
-            <boxGeometry args={[6.4, 0.12, 1.9]} />
-            <meshStandardMaterial color="#1c1917" roughness={0.85} metalness={0.2} />
-            <Edges color="#292524" />
+            <boxGeometry args={[6.4, 0.14, 1.95]} />
+            <meshStandardMaterial color="#292524" roughness={0.7} metalness={0.2} />
+            <Edges color="#10b981" />
           </mesh>
-          {/* Backboard */}
-          <mesh position={[0, 1.25, -0.9]}>
+          {/* Shelf Row Number Tag on the Left Frame */}
+          <Text
+            position={[-3.05, 0.25, 0.88]}
+            fontSize={0.11}
+            color="#34d399"
+            anchorX="left"
+            anchorY="middle"
+          >
+            {`LVL-${String(rIdx + 1).padStart(2, '0')}`}
+          </Text>
+          {/* Shelf Backboard */}
+          <mesh position={[0, 1.15, -0.95]}>
             <boxGeometry args={[6.4, ROW_VERTICAL_GAP, 0.08]} />
-            <meshStandardMaterial color="#0c0a09" roughness={0.95} />
+            <meshStandardMaterial color="#0c130f" roughness={0.9} />
           </mesh>
         </group>
       ))}
 
-      {/* Render Physical Cases */}
       {items.map((item, idx) => (
         <AlbumCaseMesh
           key={item.id}
           item={item}
           index={idx}
+          scrollOffset={scrollOffset}
           isSelected={selectedItem?.id === item.id}
           anySelected={Boolean(selectedItem)}
           onSelect={onSelect}
@@ -205,9 +266,11 @@ export default function PS2ShelfView() {
   const [sortBy, setSortBy] = useState<'ALPHA' | 'FORMAT'>('ALPHA')
   const [filterFormat, setFilterFormat] = useState<'ALL' | 'VINYL' | 'CD' | 'CASSETTE'>('ALL')
   const [scrollOffset, setScrollOffset] = useState(0)
+  const [isBulkSeeding, setIsBulkSeeding] = useState(false)
 
-  // Add Modal State
   const [showAddModal, setShowAddModal] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [confirmClearAll, setConfirmClearAll] = useState(false)
   const [newArtist, setNewArtist] = useState('')
   const [newTitle, setNewTitle] = useState('')
   const [newFormat, setNewFormat] = useState<'VINYL' | 'CD' | 'CASSETTE'>('VINYL')
@@ -234,11 +297,22 @@ export default function PS2ShelfView() {
       })
   }, [items, sortBy, filterFormat])
 
-  const maxScroll = Math.max(0, (Math.ceil(displayedItems.length / ITEMS_PER_ROW) - 1) * ROW_VERTICAL_GAP)
+  const totalRows = Math.max(1, Math.ceil(displayedItems.length / ITEMS_PER_ROW))
+  const maxScroll = Math.max(0, (totalRows - 1) * ROW_VERTICAL_GAP)
+  const currentRowIndex = Math.min(totalRows, Math.round(scrollOffset / ROW_VERTICAL_GAP) + 1)
 
   const handleWheel = (e: React.WheelEvent) => {
     if (selectedItem) return
-    setScrollOffset((prev) => Math.min(maxScroll, Math.max(0, prev + e.deltaY * 0.003)))
+    setScrollOffset((prev) => Math.min(maxScroll, Math.max(0, prev + e.deltaY * 0.0035)))
+  }
+
+
+  const handleClearAll = async () => {
+    ps2Audio.playCancel()
+    await fetch('/api/collection/clear/all', { method: 'DELETE' })
+    setScrollOffset(0)
+    setSelectedItem(null)
+    await fetchCollection()
   }
 
   const handleAddAlbum = async (e: React.FormEvent) => {
@@ -271,29 +345,28 @@ export default function PS2ShelfView() {
   return (
     <div
       onWheel={handleWheel}
-      className="relative w-full h-[calc(100vh-64px)] overflow-hidden bg-[#050806] font-mono text-emerald-400 select-none"
+      className="relative w-full h-[calc(100vh-64px)] overflow-hidden bg-[#07120c] font-mono text-emerald-400 select-none"
     >
-      {/* PS2 CRT Scanline & Vignette Overlay */}
+      {/* PS2 CRT Scanlines */}
       <div
-        className="pointer-events-none absolute inset-0 z-20 opacity-25"
+        className="pointer-events-none absolute inset-0 z-20 opacity-20"
         style={{
           backgroundImage:
             'repeating-linear-gradient(0deg, rgba(0,0,0,0.65), rgba(0,0,0,0.65) 1px, transparent 1px, transparent 3px)',
         }}
       />
-      <div className="pointer-events-none absolute inset-0 z-20 shadow-[inset_0_0_120px_rgba(0,0,0,0.95)]" />
 
-      {/* Top PS2 Biohazard Inventory Control Bar */}
-      <div className="relative z-30 flex flex-wrap items-center justify-between gap-4 border-b border-emerald-900/80 bg-black/80 px-6 py-3 backdrop-blur-sm">
-        <div className="flex items-center gap-3">
+      {/* Top Inventory Control Bar */}
+      <div className="relative z-30 flex flex-wrap items-center justify-between gap-3 border-b border-emerald-900/80 bg-black/85 px-4 sm:px-6 py-3 backdrop-blur-sm">
+        <div className="flex items-center gap-2.5">
           <Disc className="h-5 w-5 animate-spin text-emerald-400" />
-          <span className="tracking-widest text-sm font-bold text-emerald-300">
-            ARCHIVE // PHYSICAL MEDIA STORAGE [{displayedItems.length} ITEMS]
+          <span className="tracking-widest text-xs sm:text-sm font-bold text-emerald-300">
+            COLLECTION // ARCHIVE [{displayedItems.length} ITEMS | {totalRows} SHELVES]
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          {/* Filter by Format */}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {/* Format Filter */}
           <div className="flex items-center border border-emerald-800 bg-black/90 p-0.5">
             {(['ALL', 'VINYL', 'CD', 'CASSETTE'] as const).map((fmt) => (
               <button
@@ -301,8 +374,9 @@ export default function PS2ShelfView() {
                 onClick={() => {
                   ps2Audio.playHover()
                   setFilterFormat(fmt)
+                  setScrollOffset(0)
                 }}
-                className={`px-2.5 py-1 transition ${
+                className={`px-2 py-1 transition ${
                   filterFormat === fmt ? 'bg-emerald-700 text-black font-bold' : 'text-emerald-400 hover:bg-emerald-950'
                 }`}
               >
@@ -311,18 +385,26 @@ export default function PS2ShelfView() {
             ))}
           </div>
 
-          {/* Sort Mode */}
           <button
             onClick={() => {
               ps2Audio.playHover()
               setSortBy((s) => (s === 'ALPHA' ? 'FORMAT' : 'ALPHA'))
             }}
-            className="border border-emerald-700 bg-black/90 px-3 py-1.5 text-emerald-300 hover:bg-emerald-900/50"
+            className="border border-emerald-700 bg-black/90 px-2.5 py-1.5 text-emerald-300 hover:bg-emerald-900/50"
           >
             SORT: {sortBy === 'ALPHA' ? 'A-Z' : 'FORMAT'}
           </button>
+        
 
-          {/* Add Physical Album Button */}
+          {items.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              className="border border-red-800/80 bg-red-950/40 px-2.5 py-1.5 text-red-400 hover:bg-red-800 hover:text-white transition"
+            >
+              CLEAR
+            </button>
+          )}
+
           <button
             onClick={() => {
               ps2Audio.playSelect()
@@ -335,6 +417,23 @@ export default function PS2ShelfView() {
         </div>
       </div>
 
+      {/* Left Vertical Shelf Level Scrubber (For fast navigation through 200+ items) */}
+      {totalRows > 1 && !selectedItem && (
+        <div className="absolute left-4 top-20 bottom-16 z-30 flex flex-col items-center justify-between border border-emerald-800/80 bg-black/85 px-2 py-3 text-[11px]">
+          <span className="font-bold text-amber-400">LVL {String(currentRowIndex).padStart(2, '0')}</span>
+          <input
+            type="range"
+            min={0}
+            max={maxScroll}
+            step={0.1}
+            value={scrollOffset}
+            onChange={(e) => setScrollOffset( parseFloat(e.target.value) )}
+            className="h-full w-1.5 accent-emerald-400 cursor-pointer [writing-mode:vertical-lr]"
+          />
+          <span className="text-emerald-600">/{String(totalRows).padStart(2, '0')}</span>
+        </div>
+      )}
+
       {/* 3D Infinite Shelf Canvas */}
       <Canvas shadows camera={{ position: [0, 0, 5.2], fov: 50 }}>
         <ShelfEnvironment
@@ -345,26 +444,24 @@ export default function PS2ShelfView() {
         />
       </Canvas>
 
-      {/* Bottom HUD Prompt */}
       {!selectedItem && (
-        <div className="pointer-events-none absolute bottom-5 left-6 z-30 border border-emerald-900/80 bg-black/85 px-4 py-2 text-xs text-emerald-400/90">
-          [MOUSE] PAN CAMERA &amp; HOVER SPINE &nbsp;|&nbsp; [SCROLL] NAVIGATE SHELF LEVELS &nbsp;|&nbsp; [CLICK] EXAMINE ITEM
+        <div className="pointer-events-none absolute bottom-4 left-16 right-4 sm:right-auto z-30 border border-emerald-900/80 bg-black/85 px-3 py-2 text-[11px] sm:text-xs text-emerald-400/90">
+          [MOUSE] FLASHLIGHT &amp; HOVER SPINE &nbsp;|&nbsp; [SCROLL / SLIDER] NAVIGATE {totalRows} SHELF LEVELS &nbsp;|&nbsp; [CLICK] EXAMINE COVER
         </div>
       )}
 
-      {/* PS2 Resident Evil "EXAMINE ITEM" Right Panel when an Album is Picked Off the Shelf */}
+      {/* Item Examination Panel */}
       {selectedItem && (
-        <div className="absolute right-8 top-20 bottom-8 z-30 flex w-full max-w-md flex-col justify-between border-2 border-emerald-600/80 bg-black/90 p-6 text-emerald-300 shadow-[0_0_50px_rgba(16,185,129,0.25)] backdrop-blur-md">
+        <div className="absolute inset-x-4 bottom-4 top-auto max-h-[58vh] md:inset-x-auto md:right-8 md:top-20 md:bottom-8 md:max-h-none z-30 flex w-auto md:w-full md:max-w-md flex-col justify-between border-2 border-emerald-600/80 bg-black/90 p-5 sm:p-6 text-emerald-300 shadow-[0_0_50px_rgba(16,185,129,0.25)] backdrop-blur-md">
           <div className="overflow-y-auto pr-2">
             <div className="flex items-center justify-between border-b border-emerald-800 pb-2 text-xs text-amber-400">
               <span>ITEM EXAMINATION // FORMAT: {selectedItem.format}</span>
               <span>ID #{selectedItem.id.toString().padStart(3, '0')}</span>
             </div>
 
-            <h2 className="mt-3 text-2xl font-bold tracking-wider text-white">{selectedItem.title}</h2>
+            <h2 className="mt-3 text-xl sm:text-2xl font-bold tracking-wider text-white">{selectedItem.title}</h2>
             <p className="text-sm text-emerald-400">{selectedItem.artist}</p>
 
-            {/* Streaming Links */}
             <div className="mt-4 flex gap-3 text-xs">
               <a
                 href={selectedItem.apple_music_url}
@@ -384,12 +481,11 @@ export default function PS2ShelfView() {
               </a>
             </div>
 
-            {/* Tracklist Inspection */}
-            <div className="mt-5">
+            <div className="mt-4">
               <div className="mb-2 text-xs font-bold tracking-widest text-amber-400">
                 RECORDED TRACKLIST ({selectedItem.tracks.length} TRACKS)
               </div>
-              <div className="max-h-64 space-y-1.5 overflow-y-auto border border-emerald-900/80 bg-black/60 p-3 text-xs">
+              <div className="max-h-40 md:max-h-64 space-y-1.5 overflow-y-auto border border-emerald-900/80 bg-black/60 p-3 text-xs">
                 {selectedItem.tracks.map((tr) => (
                   <div key={tr.number} className="flex justify-between border-b border-emerald-950/70 pb-1">
                     <span className="truncate pr-3">
@@ -402,32 +498,53 @@ export default function PS2ShelfView() {
             </div>
           </div>
 
-          {/* Return to Shelf / Remove Buttons */}
           <div className="mt-4 flex gap-3 border-t border-emerald-800 pt-4 text-xs">
-            <button
-              onClick={() => {
-                ps2Audio.playCancel()
-                setSelectedItem(null)
-              }}
-              className="flex flex-1 items-center justify-center gap-2 border border-emerald-500 bg-emerald-900/40 py-2.5 font-bold text-white hover:bg-emerald-600 hover:text-black transition"
-            >
-              <RotateCcw className="h-4 w-4" /> RETURN TO SHELF
-            </button>
-            <button
-              onClick={() => handleDelete(selectedItem.id)}
-              className="flex items-center justify-center border border-red-600/80 bg-red-950/40 px-3 py-2.5 text-red-400 hover:bg-red-700 hover:text-white transition"
-              title="Remove from Collection"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            {confirmDeleteId === selectedItem.id ? (
+              <div className="flex items-center gap-1.5 bg-red-950/90 border border-red-500 px-2.5 py-1.5">
+                <span className="text-[11px] font-bold text-red-200">DISCARD?</span>
+                <button
+                  onClick={() => {
+                    handleDelete(selectedItem.id)
+                    setConfirmDeleteId(null)
+                  }}
+                  className="bg-red-600 px-2 py-1 font-bold text-black hover:bg-red-400"
+                >
+                  YES
+                </button>
+                <button
+                  onClick={() => {
+                    ps2Audio.playCancel()
+                    setConfirmDeleteId(null)
+                  }}
+                  className="border border-red-400 px-2 py-1 text-red-200 hover:bg-red-900"
+                >
+                  NO
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  ps2Audio.playHover()
+                  setConfirmDeleteId(selectedItem.id)
+                }}
+                className="flex items-center justify-center border border-red-600/80 bg-red-950/40 px-3 py-2.5 text-red-400 hover:bg-red-700 hover:text-white transition"
+                title="Remove from Collection"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
       )}
 
       {/* Add Physical Album Modal */}
       {showAddModal && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+        <div
+          onClick={() => setShowAddModal(false)}
+          className="absolute inset-0 z-40 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+        >
           <form
+            onClick={(e) => e.stopPropagation()}
             onSubmit={handleAddAlbum}
             className="w-full max-w-md border-2 border-emerald-600 bg-[#070d09] p-6 shadow-[0_0_40px_rgba(16,185,129,0.3)]"
           >

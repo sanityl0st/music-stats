@@ -1,7 +1,9 @@
-// frontend/src/components/ui/StatsDashboard.tsx
-import { useState, useEffect } from 'react'
+
+import { useState, useEffect, useRef } from 'react'
 import { useThemeStore, type LayoutPreset, type FontPreset } from '../../store/useThemeStore'
-import { Sliders, Upload, Sparkles, Clock, Disc, Music, User, RotateCcw } from 'lucide-react'
+import { Sliders, Upload, Sparkles, Clock, Disc, Music, User, RotateCcw, Share2, Database } from 'lucide-react'
+import ShareCardModal from './SharedCardModal'
+import SyncWizardModal from './SyncWizard'
 
 interface StatsData {
   timeframe: string
@@ -17,16 +19,46 @@ interface StatsData {
   recent_streams: { id: number; track: string; artist: string; album: string; artwork_url: string; played_at: string }[]
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || ''
+
 export default function StatsDashboard() {
   const [timeframe, setTimeframe] = useState<'all' | 'month' | 'week'>('all')
   const [data, setData] = useState<StatsData | null>(null)
   const [showCustomizer, setShowCustomizer] = useState(false)
-  const [isSeeding, setIsSeeding] = useState(false)
+  const [showShareModal, setShowShareModal] = useState(false)
+  const [showSyncModal, setShowSyncModal] = useState(false)
 
+  const customizerRef = useRef<HTMLDivElement>(null)
+  const triggerBtnRef = useRef<HTMLButtonElement>(null)
   const theme = useThemeStore()
 
+  useEffect(() => {
+    if (!showCustomizer) return
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (
+        customizerRef.current &&
+        !customizerRef.current.contains(target) &&
+        triggerBtnRef.current &&
+        !triggerBtnRef.current.contains(target)
+      ) {
+        setShowCustomizer(false)
+      }
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowCustomizer(false)
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [showCustomizer])
+
   const fetchStats = async (tf: string) => {
-    const res = await fetch(`/api/stats/overview?timeframe=${tf}`)
+    const res = await fetch(`${API_BASE}/api/stats/overview?timeframe=${tf}`)
     const json = await res.json()
     setData(json)
   }
@@ -34,13 +66,6 @@ export default function StatsDashboard() {
   useEffect(() => {
     fetchStats(timeframe)
   }, [timeframe])
-
-  const handleSeedMock = async () => {
-    setIsSeeding(true)
-    await fetch('/api/sync/seed-mock', { method: 'POST' })
-    await fetchStats(timeframe)
-    setIsSeeding(false)
-  }
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -66,21 +91,24 @@ export default function StatsDashboard() {
       ? 'grid-cols-1 gap-6 max-w-4xl mx-auto'
       : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'
 
+  const timeframeLabel =
+    timeframe === 'all' ? 'All-Time' : timeframe === 'month' ? 'Monthly Recap' : 'Weekly Recap'
+
   return (
-    <div className={`min-h-screen px-6 py-8 text-white ${fontClass}`}>
-      {/* Header Bar: Timeframe Recaps + Customize Button */}
+    <div className={`min-h-screen px-4 sm:px-6 py-8 text-white ${fontClass}`}>
+      {/* Header Bar */}
       <div className="mx-auto max-w-7xl flex flex-wrap items-center justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight" style={{ color: theme.primaryColor }}>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight" style={{ color: theme.primaryColor }}>
             LISTENING TELEMETRY
           </h1>
-          <p className="text-sm text-zinc-300">
-            Lifetime, Monthly &amp; Weekly Apple Music Analytics
+          <p className="text-xs sm:text-sm text-zinc-300">
+            Lifetime, Monthly &amp; Weekly Music Analytics
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Timeframe Switcher (All-Time / Monthly Recap / Weekly Recap) */}
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          {/* Timeframe Switcher */}
           <div
             className="flex rounded-xl p-1 border border-white/15 backdrop-blur-md"
             style={{ backgroundColor: theme.cardBgColor }}
@@ -88,14 +116,14 @@ export default function StatsDashboard() {
             {(
               [
                 ['all', 'All-Time'],
-                ['month', 'Monthly Recap'],
-                ['week', 'Weekly Recap'],
+                ['month', 'Monthly'],
+                ['week', 'Weekly'],
               ] as const
             ).map(([key, label]) => (
               <button
                 key={key}
                 onClick={() => setTimeframe(key)}
-                className="px-4 py-1.5 rounded-lg text-xs font-bold transition"
+                className="px-3 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition"
                 style={{
                   backgroundColor: timeframe === key ? theme.primaryColor : 'transparent',
                   color: timeframe === key ? '#09090b' : '#e4e4e7',
@@ -106,19 +134,31 @@ export default function StatsDashboard() {
             ))}
           </div>
 
+          {/* Sync Music Data Button */}
           <button
-            onClick={handleSeedMock}
-            disabled={isSeeding}
-            className="flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2 text-xs font-semibold hover:bg-white/10 backdrop-blur-md transition"
+            onClick={() => setShowSyncModal(true)}
+            className="flex items-center gap-2 rounded-xl border border-white/15 px-3 sm:px-4 py-2 text-xs font-semibold hover:bg-white/10 backdrop-blur-md transition"
             style={{ backgroundColor: theme.cardBgColor }}
           >
-            <Sparkles className="h-4 w-4" style={{ color: theme.secondaryColor }} />
-            {isSeeding ? 'Syncing...' : 'Seed Demo Data'}
+            <Database className="h-4 w-4" style={{ color: theme.primaryColor }} />
+            Sync Data
           </button>
 
+          {/* Share Wrapped Graphic Button */}
           <button
-            onClick={() => setShowCustomizer(!showCustomizer)}
-            className="flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold text-black transition"
+            onClick={() => setShowShareModal(true)}
+            className="flex items-center gap-2 rounded-xl border border-white/15 px-3 sm:px-4 py-2 text-xs font-semibold hover:bg-white/10 backdrop-blur-md transition"
+            style={{ backgroundColor: theme.cardBgColor }}
+          >
+            <Share2 className="h-4 w-4" style={{ color: theme.secondaryColor }} />
+            Share Wrapped
+          </button>
+
+          {/* Customize UI Button */}
+          <button
+            ref={triggerBtnRef}
+            onClick={() => setShowCustomizer((prev) => !prev)}
+            className="flex items-center gap-2 rounded-xl px-3 sm:px-4 py-2 text-xs font-bold text-black transition"
             style={{ backgroundColor: theme.secondaryColor }}
           >
             <Sliders className="h-4 w-4" /> Customize UI
@@ -126,7 +166,7 @@ export default function StatsDashboard() {
         </div>
       </div>
 
-      {/* KPI Summary Cards */}
+      {/* Main Stats Content */}
       {data && (
         <div className="mx-auto max-w-7xl space-y-8">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -138,25 +178,24 @@ export default function StatsDashboard() {
             ].map((stat, idx) => (
               <div
                 key={idx}
-                className="rounded-2xl border border-white/15 p-5 backdrop-blur-md shadow-xl"
+                className="rounded-2xl border border-white/15 p-4 sm:p-5 backdrop-blur-md shadow-xl"
                 style={{ backgroundColor: theme.cardBgColor }}
               >
-                <div className="flex items-center justify-between text-xs text-zinc-400">
+                <div className="flex items-center justify-between text-[11px] sm:text-xs text-zinc-400">
                   <span>{stat.label}</span>
                   <stat.icon className="h-4 w-4" style={{ color: theme.primaryColor }} />
                 </div>
-                <div className="mt-2 text-3xl font-black" style={{ color: theme.secondaryColor }}>
+                <div className="mt-2 text-2xl sm:text-3xl font-black" style={{ color: theme.secondaryColor }}>
                   {stat.value}
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Customizable Leaderboard Grid */}
           <div className={`grid ${layoutGridClass}`}>
             {/* Top Artists */}
             <div
-              className="rounded-2xl border border-white/15 p-6 backdrop-blur-md"
+              className="rounded-2xl border border-white/15 p-5 sm:p-6 backdrop-blur-md"
               style={{ backgroundColor: theme.cardBgColor }}
             >
               <h2 className="text-lg font-bold mb-4 flex items-center gap-2" style={{ color: theme.primaryColor }}>
@@ -185,7 +224,7 @@ export default function StatsDashboard() {
 
             {/* Top Albums */}
             <div
-              className="rounded-2xl border border-white/15 p-6 backdrop-blur-md"
+              className="rounded-2xl border border-white/15 p-5 sm:p-6 backdrop-blur-md"
               style={{ backgroundColor: theme.cardBgColor }}
             >
               <h2 className="text-lg font-bold mb-4 flex items-center gap-2" style={{ color: theme.primaryColor }}>
@@ -217,7 +256,7 @@ export default function StatsDashboard() {
 
             {/* Top Tracks */}
             <div
-              className="rounded-2xl border border-white/15 p-6 backdrop-blur-md"
+              className="rounded-2xl border border-white/15 p-5 sm:p-6 backdrop-blur-md"
               style={{ backgroundColor: theme.cardBgColor }}
             >
               <h2 className="text-lg font-bold mb-4 flex items-center gap-2" style={{ color: theme.primaryColor }}>
@@ -249,7 +288,7 @@ export default function StatsDashboard() {
 
             {/* Recent Listening History */}
             <div
-              className={`rounded-2xl border border-white/15 p-6 backdrop-blur-md ${
+              className={`rounded-2xl border border-white/15 p-5 sm:p-6 backdrop-blur-md ${
                 theme.layout === 'bento' ? 'lg:col-span-3' : ''
               }`}
               style={{ backgroundColor: theme.cardBgColor }}
@@ -283,12 +322,18 @@ export default function StatsDashboard() {
         </div>
       )}
 
-      {/* Slide-out Theme & Layout Customizer Drawer */}
+      {/* Customizer Pop-up */}
       {showCustomizer && (
-        <div className="fixed right-6 top-20 z-50 w-80 rounded-2xl border border-white/20 bg-zinc-950/95 p-6 shadow-2xl backdrop-blur-xl">
+        <div
+          ref={customizerRef}
+          className="fixed right-4 sm:right-6 top-20 z-50 w-80 rounded-2xl border border-white/20 bg-zinc-950/95 p-6 shadow-2xl backdrop-blur-xl"
+        >
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <h3 className="font-bold text-sm">Customize Dashboard</h3>
-            <button onClick={() => theme.resetTheme()} className="text-xs text-zinc-400 hover:text-white flex items-center gap-1">
+            <button
+              onClick={() => theme.resetTheme()}
+              className="text-xs text-zinc-400 hover:text-white flex items-center gap-1"
+            >
               <RotateCcw className="h-3 w-3" /> Reset
             </button>
           </div>
@@ -367,6 +412,25 @@ export default function StatsDashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Sync Music Data Wizard Modal */}
+      {showSyncModal && (
+        <SyncWizardModal
+          onClose={() => setShowSyncModal(false)}
+          onSuccess={() => fetchStats(timeframe)}
+        />
+      )}
+
+      {/* Procedural Shareable Wrapped Card Modal */}
+      {showShareModal && data && (
+        <ShareCardModal
+          timeframeLabel={timeframeLabel}
+          totalMinutes={data.total_minutes_listened}
+          topArtists={data.top_artists}
+          topTracks={data.top_tracks}
+          onClose={() => setShowShareModal(false)}
+        />
       )}
     </div>
   )
