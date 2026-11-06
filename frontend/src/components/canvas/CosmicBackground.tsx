@@ -3,7 +3,7 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { Stars, Sparkles, Float, Trail } from '@react-three/drei'
 import * as THREE from 'three'
 
-import { useGLTF } from '@react-three/drei'
+//import { useGLTF } from '@react-three/drei'
 
 // function CustomSpaceModel() {
 //   const { scene } = useGLTF('/models/voyager.glb')
