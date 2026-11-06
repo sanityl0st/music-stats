@@ -5,10 +5,10 @@ import * as THREE from 'three'
 
 import { useGLTF } from '@react-three/drei'
 
-function CustomSpaceModel() {
-  const { scene } = useGLTF('/models/voyager.glb')
-  return <primitive object={scene} position={[-3, 1.5, -4]} scale={0.5} />
-}
+// function CustomSpaceModel() {
+//   const { scene } = useGLTF('/models/voyager.glb')
+//   return <primitive object={scene} position={[-3, 1.5, -4]} scale={0.5} />
+// }
 
 // Custom GLSL Shader to recreate the vivid Green / Orange / Magenta / Blue glowing planet in the reference image
 const planetVertexShader = `

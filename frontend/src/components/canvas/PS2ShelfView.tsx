@@ -4,7 +4,7 @@ import { Canvas, useFrame } from '@react-three/fiber'
 import { Text, Edges } from '@react-three/drei'
 import * as THREE from 'three'
 import { ps2Audio } from '../../utils/ps2Audio'
-import { Disc, ExternalLink, Plus, Trash2, RotateCcw, Music, Layers } from 'lucide-react'
+import { Disc, ExternalLink, Plus, Trash2, /*RotateCcw,*/ Music, /*Layers*/ } from 'lucide-react'
 
 export interface PhysicalAlbum {
   id: number
@@ -266,11 +266,11 @@ export default function PS2ShelfView() {
   const [sortBy, setSortBy] = useState<'ALPHA' | 'FORMAT'>('ALPHA')
   const [filterFormat, setFilterFormat] = useState<'ALL' | 'VINYL' | 'CD' | 'CASSETTE'>('ALL')
   const [scrollOffset, setScrollOffset] = useState(0)
-  const [isBulkSeeding, setIsBulkSeeding] = useState(false)
+  //const [isBulkSeeding, setIsBulkSeeding] = useState(false)
 
   const [showAddModal, setShowAddModal] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
-  const [confirmClearAll, setConfirmClearAll] = useState(false)
+  //const [confirmClearAll, setConfirmClearAll] = useState(false)
   const [newArtist, setNewArtist] = useState('')
   const [newTitle, setNewTitle] = useState('')
   const [newFormat, setNewFormat] = useState<'VINYL' | 'CD' | 'CASSETTE'>('VINYL')
