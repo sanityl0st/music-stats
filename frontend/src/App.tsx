@@ -21,16 +21,24 @@ export default function App() {
       const res = await fetch('/api/auth/verify', {
         headers: { 'X-Admin-Key': keyToTest },
       })
-      if (res.ok) {
+      if (!res.ok) {
+        setIsAdmin(false)
+        return false
+      }
+      // Safely check if response is JSON before parsing
+      const contentType = res.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        await res.json()
         setIsAdmin(true)
         localStorage.setItem('admin_key', keyToTest)
         return true
       }
+      setIsAdmin(false)
+      return false
     } catch {
-      // Ignore network error
+      setIsAdmin(false)
+      return false
     }
-    setIsAdmin(false)
-    return false
   }
 
   useEffect(() => {

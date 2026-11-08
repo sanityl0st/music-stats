@@ -58,9 +58,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/auth/verify", dependencies=[Depends(verify_admin)])
-def check_admin_key():
-    """Returns 200 OK only if the provided X-Admin-Key matches ADMIN_SECRET."""
+@app.get("/api/auth/verify")
+def check_admin_key(x_admin_key: str = Header(default="")):
+    """Verifies if the provided X-Admin-Key matches ADMIN_SECRET."""
+    if ADMIN_SECRET:
+        if not x_admin_key or not secrets.compare_digest(x_admin_key, ADMIN_SECRET):
+            raise HTTPException(status_code=403, detail="Invalid Admin Key")
     return {"status": "authorized"}
 
 
