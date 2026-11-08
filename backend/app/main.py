@@ -63,10 +63,6 @@ def check_admin_key():
     """Returns 200 OK only if the provided X-Admin-Key matches ADMIN_SECRET."""
     return {"status": "authorized"}
 
-class PhysicalItemCreate(BaseModel):
-    artist: str
-    title: str
-    format: str  # "VINYL", "CD", or "CASSETTE"
 
 @app.post("/api/sync/upload-xml", dependencies=[Depends(verify_admin)])
 async def upload_library_xml(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -240,6 +236,24 @@ def get_stats_overview(
     }
 
 # --- PHYSICAL COLLECTION ENDPOINTS ---
+
+@app.get("/api/collection")
+def get_physical_collection(db: Session = Depends(get_db)):
+    """Returns all physical Vinyl, CD, and Cassette items on the shelf."""
+    items = db.query(PhysicalItem).order_by(PhysicalItem.title.asc()).all()
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "artist": item.artist,
+            "format": item.format,
+            "artwork_url": item.artwork_url,
+            "apple_music_url": item.apple_music_url,
+            "spotify_url": item.spotify_url,
+            "tracks": json.loads(item.tracklist_json or "[]"),
+        }
+        for item in items
+    ]
 
 @app.post("/api/collection", dependencies=[Depends(verify_admin)])
 async def add_physical_item(payload: PhysicalItemCreate, db: Session = Depends(get_db)):

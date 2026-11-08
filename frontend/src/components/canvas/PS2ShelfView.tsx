@@ -192,7 +192,7 @@ function ShelfEnvironment({
   useFrame((state) => {
     const isMobile = state.size.width < 768
     // Pull camera back on mobile portrait screens so the full shelf width is visible
-    const targetZ = isMobile ? 8.4 : 5.2
+    const targetZ = isMobile ? 10.4 : 5.2
     const targetX = selectedItem ? 0 : state.pointer.x * (isMobile ? 0.45 : 1.15)
     const targetY = -scrollOffset + (selectedItem ? 0 : state.pointer.y * 0.22)
 
@@ -283,10 +283,20 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const fetchCollection = async () => {
-    const res = await fetch('/api/collection')
-    const data = await res.json()
-    setItems(data)
+    try {
+      const res = await fetch('/api/collection')
+      if (!res.ok) {
+        setItems([])
+        return
+      }
+      const data = await res.json()
+      setItems(Array.isArray(data) ? data : [])
+    } catch {
+      setItems([])
+    }
   }
+
+  
 
   useEffect(() => {
     fetchCollection()
@@ -312,7 +322,8 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
   }, [searchQuery, addMode])
 
   const displayedItems = useMemo(() => {
-    return items
+    const safeItems = Array.isArray(items) ? items : []
+    return safeItems
       .filter((i) => filterFormat === 'ALL' || i.format === filterFormat)
       .sort((a, b) => {
         if (sortBy === 'FORMAT') {
@@ -367,8 +378,14 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
         body: JSON.stringify(payload),
       })
       if (!res.ok) {
-        const err = await res.json()
-        alert(err.detail || 'Failed to add item. Check your Admin Key.')
+        const text = await res.text()
+        let msg = 'Failed to add item. Check your Admin Key.'
+        try {
+          msg = JSON.parse(text).detail || msg
+        } catch {
+          msg = text || msg
+        }
+        alert(msg)
         return
       }
       setSearchQuery('')
