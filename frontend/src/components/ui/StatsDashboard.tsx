@@ -140,14 +140,17 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
           </div>
 
           {/* Sync Music Data Button */}
-          <button
-            onClick={() => setShowSyncModal(true)}
-            className="flex items-center gap-2 rounded-xl border border-white/15 px-3 sm:px-4 py-2 text-xs font-semibold hover:bg-white/10 backdrop-blur-md transition"
-            style={{ backgroundColor: theme.cardBgColor }}
-          >
-            <Database className="h-4 w-4" style={{ color: theme.primaryColor }} />
-            Sync Data
-          </button>
+          {/* Sync Music Data Button (Only visible when Owner is unlocked) */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowSyncModal(true)}
+              className="flex items-center gap-2 rounded-xl border border-white/15 px-3 sm:px-4 py-2 text-xs font-semibold hover:bg-white/10 backdrop-blur-md transition"
+              style={{ backgroundColor: theme.cardBgColor }}
+            >
+              <Database className="h-4 w-4" style={{ color: theme.primaryColor }} />
+              Sync Data
+            </button>
+          )}
 
           {/* Share Wrapped Graphic Button */}
           <button
