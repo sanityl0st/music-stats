@@ -200,6 +200,18 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
             ))}
           </div>
 
+          {!data ? (
+          <div className="flex items-center justify-center py-20 text-sm text-zinc-400">
+            CONNECTING TO TELEMETRY SERVER...
+          </div>
+        ) : (
+          <div className={`grid ${layoutGridClass}`}>
+            {/* Top Artists, Top Albums, Top Tracks, Recent Streams grid... */}
+          </div>
+        )}
+
+          
+
           <div className={`grid ${layoutGridClass}`}>
             {/* Top Artists */}
             <div
