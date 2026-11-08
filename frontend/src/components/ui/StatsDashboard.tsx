@@ -19,13 +19,10 @@ interface StatsData {
   recent_streams: { id: number; track: string; artist: string; album: string; artwork_url: string; played_at: string }[]
 }
 
-interface StatsDashboardProps {
-  isAdmin?: boolean
-}
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
-export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) {
+export default function StatsDashboard() {
   const [timeframe, setTimeframe] = useState<'all' | 'month' | 'week'>('all')
   const [data, setData] = useState<StatsData | null>(null)
   const [showCustomizer, setShowCustomizer] = useState(false)
