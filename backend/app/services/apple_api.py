@@ -90,6 +90,21 @@ async def enrich_missing_artwork(db: Session, limit: int = 60) -> dict:
 
     updated_albums = 0
     updated_artists = 0
+    
+    used_catalog_ids = {
+            row[0] for row in db.query(Album.apple_catalog_id).filter(Album.apple_catalog_id.isnot(None)).all()
+        }
+
+    for album in priority_albums:
+        art_url, catalog_id = await resolve_artwork_with_guardrail(client, album.artist.name, album.title)
+        if art_url:
+            album.artwork_url = art_url
+            if catalog_id and catalog_id not in used_catalog_ids:
+                album.apple_catalog_id = catalog_id
+                used_catalog_ids.add(catalog_id)
+            if not album.artist.artwork_url:
+                album.artist.artwork_url = art_url
+            updated_albums += 1
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         for album in priority_albums:

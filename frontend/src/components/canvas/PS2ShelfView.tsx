@@ -24,6 +24,7 @@ interface CatalogSuggestion {
   release_year: string
 }
 
+
 const ITEMS_PER_ROW = 12
 const ROW_VERTICAL_GAP = 2.4
 const SPINE_HORIZONTAL_GAP = 0.44

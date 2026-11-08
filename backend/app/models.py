@@ -9,7 +9,7 @@ class Artist(Base):
     __tablename__ = "artists"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
-    apple_catalog_id = Column(String, unique=True, nullable=True)
+    apple_catalog_id = Column(String, nullable=True)  # Removed unique=True
     artwork_url = Column(String, nullable=True)
 
     albums = relationship("Album", back_populates="artist")
@@ -20,8 +20,8 @@ class Album(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True, nullable=False)
     artist_id = Column(Integer, ForeignKey("artists.id"), nullable=False)
-    apple_catalog_id = Column(String, unique=True, nullable=True)
-    artwork_url = Column(String, nullable=True)  # Will feed 3D vinyl textures
+    apple_catalog_id = Column(String, nullable=True)  # Removed unique=True
+    artwork_url = Column(String, nullable=True)
 
     artist = relationship("Artist", back_populates="albums")
     tracks = relationship("Track", back_populates="album")
