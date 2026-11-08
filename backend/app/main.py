@@ -2,7 +2,8 @@
 import json
 import random
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query, Header
+from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query, Header, Security
+from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -32,14 +33,17 @@ class PhysicalItemCreate(BaseModel):
 # Defaults to empty string locally (unlocked for easy local use); set ADMIN_SECRET in production!
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 
-def verify_admin(x_admin_key: str = Header(default="")):
-    # If ADMIN_SECRET is set on the server, enforce constant-time comparison
+api_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+
+def verify_admin(x_admin_key: str | None = Security(api_key_header)):
+    """Verifies the admin key without hanging if missing."""
     if ADMIN_SECRET:
         if not x_admin_key or not secrets.compare_digest(x_admin_key, ADMIN_SECRET):
             raise HTTPException(
                 status_code=403,
-                detail="Unauthorized: Only the site owner can sync or modify data."
+                detail="Unauthorized: Invalid or missing Admin Key."
             )
+    return True
 
 class TimeFrame(str, Enum):
     all = "all"
@@ -59,11 +63,8 @@ app.add_middleware(
 )
 
 @app.get("/api/auth/verify")
-def check_admin_key(x_admin_key: str = Header(default="")):
+def check_admin_key(authorized: bool = Depends(verify_admin)):
     """Verifies if the provided X-Admin-Key matches ADMIN_SECRET."""
-    if ADMIN_SECRET:
-        if not x_admin_key or not secrets.compare_digest(x_admin_key, ADMIN_SECRET):
-            raise HTTPException(status_code=403, detail="Invalid Admin Key")
     return {"status": "authorized"}
 
 

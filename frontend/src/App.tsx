@@ -18,14 +18,20 @@ export default function App() {
   // Check if we already have a valid admin_key saved in this browser
   const verifyStoredKey = async (keyToTest: string) => {
     try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 8000) // 8 second timeout
+
       const res = await fetch('/api/auth/verify', {
         headers: { 'X-Admin-Key': keyToTest },
+        signal: controller.signal,
       })
+      clearTimeout(timeoutId)
+
       if (!res.ok) {
         setIsAdmin(false)
         return false
       }
-      // Safely check if response is JSON before parsing
+
       const contentType = res.headers.get('content-type')
       if (contentType && contentType.includes('application/json')) {
         await res.json()
