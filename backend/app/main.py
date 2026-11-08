@@ -2,7 +2,7 @@
 import json
 import random
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -13,15 +13,33 @@ from .services.parser import ingest_library_xml, ingest_play_activity_csv, get_o
 from .services.apple_api import enrich_missing_artwork, fetch_album_metadata_and_tracks
 from enum import Enum
 import os
-from fastapi import Header
+import secrets
 from .services.parser import ingest_library_xml, ingest_play_activity_csv, ingest_spotify_json, get_or_create_entities
+from .services.apple_api import (
+    enrich_missing_artwork,
+    fetch_album_metadata_and_tracks,
+    search_catalog_suggestions,
+    fetch_album_by_share_url_or_id,
+)
+
+class PhysicalItemCreate(BaseModel):
+    artist: str = ""
+    title: str = ""
+    format: str  # "VINYL", "CD", or "CASSETTE"
+    share_url: str | None = None
+    collection_id: str | None = None
 
 # Defaults to empty string locally (unlocked for easy local use); set ADMIN_SECRET in production!
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 
 def verify_admin(x_admin_key: str = Header(default="")):
-    if ADMIN_SECRET and x_admin_key != ADMIN_SECRET:
-        raise HTTPException(status_code=403, detail="Invalid or missing Admin Key. Read-only mode active.")
+    # If ADMIN_SECRET is set on the server, enforce constant-time comparison
+    if ADMIN_SECRET:
+        if not x_admin_key or not secrets.compare_digest(x_admin_key, ADMIN_SECRET):
+            raise HTTPException(
+                status_code=403,
+                detail="Unauthorized: Only the site owner can sync or modify data."
+            )
 
 class TimeFrame(str, Enum):
     all = "all"
@@ -40,12 +58,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/api/auth/verify", dependencies=[Depends(verify_admin)])
+def check_admin_key():
+    """Returns 200 OK only if the provided X-Admin-Key matches ADMIN_SECRET."""
+    return {"status": "authorized"}
+
 class PhysicalItemCreate(BaseModel):
     artist: str
     title: str
     format: str  # "VINYL", "CD", or "CASSETTE"
 
-@app.post("/api/sync/upload-xml")
+@app.post("/api/sync/upload-xml", dependencies=[Depends(verify_admin)])
 async def upload_library_xml(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename.endswith(".xml"):
         raise HTTPException(status_code=400, detail="Please upload an Apple Music Library.xml file")
@@ -54,7 +77,7 @@ async def upload_library_xml(file: UploadFile = File(...), db: Session = Depends
     await enrich_missing_artwork(db, limit=25)
     return res
 
-@app.post("/api/sync/upload-csv")
+@app.post("/api/sync/upload-csv", dependencies=[Depends(verify_admin)])
 async def upload_activity_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload Apple Music Play Activity.csv")
@@ -62,7 +85,7 @@ async def upload_activity_csv(file: UploadFile = File(...), db: Session = Depend
     await enrich_missing_artwork(db, limit=25)
     return res
 
-@app.post("/api/sync/seed-mock")
+@app.post("/api/sync/seed-mock", dependencies=[Depends(verify_admin)])
 async def seed_mock_data(db: Session = Depends(get_db)):
     """Seeds sample listening history across the past 45 days + physical shelf items."""
     sample_catalog = [
@@ -81,7 +104,7 @@ async def seed_mock_data(db: Session = Depends(get_db)):
         _, _, track = get_or_create_entities(db, artist_name, album_title, track_title, duration_ms)
         tracks.append(track)
 
-    now = datetime.utcnow()
+    now = datetime
     added = 0
     for i in range(300):
         t = random.choice(tracks)
@@ -218,22 +241,33 @@ def get_stats_overview(
 
 # --- PHYSICAL COLLECTION ENDPOINTS ---
 
-@app.get("/api/collection")
-def get_physical_collection(db: Session = Depends(get_db)):
-    items = db.query(PhysicalItem).order_by(PhysicalItem.title.asc()).all()
-    return [
-        {
-            "id": item.id,
-            "title": item.title,
-            "artist": item.artist,
-            "format": item.format,
-            "artwork_url": item.artwork_url,
-            "apple_music_url": item.apple_music_url,
-            "spotify_url": item.spotify_url,
-            "tracks": json.loads(item.tracklist_json or "[]"),
-        }
-        for item in items
-    ]
+@app.post("/api/collection", dependencies=[Depends(verify_admin)])
+async def add_physical_item(payload: PhysicalItemCreate, db: Session = Depends(get_db)):
+    meta = await fetch_album_by_share_url_or_id(
+        share_url=payload.share_url,
+        collection_id=payload.collection_id,
+        artist=payload.artist,
+        title=payload.title,
+    )
+    item = PhysicalItem(format=payload.format.upper(), **meta)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {
+        "id": item.id,
+        "title": item.title,
+        "artist": item.artist,
+        "format": item.format,
+        "artwork_url": item.artwork_url,
+        "apple_music_url": item.apple_music_url,
+        "spotify_url": item.spotify_url,
+        "tracks": json.loads(item.tracklist_json or "[]"),
+    }
+ 
+@app.get("/api/collection/search")
+async def autocomplete_collection_search(q: str = ""):
+    """Live autocomplete endpoint for the Add Media modal."""
+    return await search_catalog_suggestions(q, limit=6)
 
 @app.post("/api/collection", dependencies=[Depends(verify_admin)])
 async def add_physical_item(payload: PhysicalItemCreate, db: Session = Depends(get_db)):
@@ -264,7 +298,7 @@ def delete_physical_item(item_id: int, db: Session = Depends(get_db)):
 
 # backend/app/main.py (Append to the bottom of the file)
 
-@app.post("/api/collection/seed-bulk")
+@app.post("/api/collection/seed-bulk", dependencies=[Depends(verify_admin)])
 def seed_bulk_collection(count: int = 220, db: Session = Depends(get_db)):
     """Instantly seeds 220+ physical items to stress-test infinite 3D shelf scrolling."""
     base_catalog = [
@@ -316,7 +350,7 @@ def seed_bulk_collection(count: int = 220, db: Session = Depends(get_db)):
     total = db.query(func.count(PhysicalItem.id)).scalar() or 0
     return {"status": "bulk_seeded", "added": count, "total_in_collection": total}
 
-@app.delete("/api/collection/clear/all")
+@app.delete("/api/collection/clear/all", dependencies=[Depends(verify_admin)])
 def clear_entire_collection(db: Session = Depends(get_db)):
     """Clears the shelf so you can reset after stress testing."""
     db.query(PhysicalItem).delete()
