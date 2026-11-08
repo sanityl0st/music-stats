@@ -22,7 +22,11 @@ interface StatsData {
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
-export default function StatsDashboard() {
+interface StatsDashboardProps {
+  isAdmin?: boolean
+}
+
+export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) {
   const [timeframe, setTimeframe] = useState<'all' | 'month' | 'week'>('all')
   const [data, setData] = useState<StatsData | null>(null)
   const [showCustomizer, setShowCustomizer] = useState(false)
