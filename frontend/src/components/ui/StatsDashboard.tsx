@@ -1,9 +1,11 @@
-
-import { useState, useEffect, useRef } from 'react'
+// frontend/src/components/ui/StatsDashboard.tsx
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useThemeStore, type LayoutPreset, type FontPreset } from '../../store/useThemeStore'
 import { Sliders, Upload, Sparkles, Clock, Disc, Music, User, RotateCcw, Share2, Database } from 'lucide-react'
 import ShareCardModal from './SharedCardModal'
 import SyncWizardModal from './SyncWizard'
+
+type TimeframeKey = 'all' | 'month' | 'week'
 
 interface StatsData {
   timeframe: string
@@ -19,20 +21,27 @@ interface StatsData {
   recent_streams: { id: number; track: string; artist: string; album: string; artwork_url: string; played_at: string }[]
 }
 
+// Safely reads VITE_API_URL if defined, or falls back to '' (relative path via Vite/Vercel proxy)
+const RAW_API_BASE = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL || ''
+const API_BASE = RAW_API_BASE.replace(/\/+$/, '')
 
-const API_BASE = import.meta.env.VITE_API_URL || ''
+const DEFAULT_ARTIST_IMG = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=100'
+const DEFAULT_ALBUM_IMG = 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=100'
 
 interface StatsDashboardProps {
   isAdmin?: boolean
 }
 
 export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) {
-  const [timeframe, setTimeframe] = useState<'all' | 'month' | 'week'>('all')
+  const [timeframe, setTimeframe] = useState<TimeframeKey>('all')
   const [data, setData] = useState<StatsData | null>(null)
+  const [loading, setLoading] = useState<boolean>(true)
   const [showCustomizer, setShowCustomizer] = useState(false)
   const [showShareModal, setShowShareModal] = useState(false)
   const [showSyncModal, setShowSyncModal] = useState(false)
 
+  // Client-side memory cache so switching between All-Time / Monthly / Weekly is instant
+  const statsCacheRef = useRef<Partial<Record<TimeframeKey, StatsData>>>({})
   const customizerRef = useRef<HTMLDivElement>(null)
   const triggerBtnRef = useRef<HTMLButtonElement>(null)
   const theme = useThemeStore()
@@ -62,15 +71,50 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
     }
   }, [showCustomizer])
 
-  const fetchStats = async (tf: string) => {
-    const res = await fetch(`${API_BASE}/api/stats/overview?timeframe=${tf}`)
-    const json = await res.json()
-    setData(json)
-  }
+  const fetchStats = useCallback(
+    async (tf: TimeframeKey, signal?: AbortSignal, forceRefresh = false) => {
+      // Serve immediately from client memory cache if available
+      if (!forceRefresh && statsCacheRef.current[tf]) {
+        setData(statsCacheRef.current[tf]!)
+        setLoading(false)
+      } else {
+        setLoading(true)
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/stats/overview?timeframe=${tf}`, { signal })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const json: StatsData = await res.json()
+        statsCacheRef.current[tf] = json
+        setData(json)
+        setLoading(false)
+
+        // Silently prefetch the other two timeframes into memory so tab clicks are 0ms
+        ;(['all', 'month', 'week'] as const).forEach((otherTf) => {
+          if (otherTf !== tf && !statsCacheRef.current[otherTf]) {
+            fetch(`${API_BASE}/api/stats/overview?timeframe=${otherTf}`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((otherJson: StatsData | null) => {
+                if (otherJson) statsCacheRef.current[otherTf] = otherJson
+              })
+              .catch(() => {})
+          }
+        })
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          console.error('Failed to load stats:', err)
+          setLoading(false)
+        }
+      }
+    },
+    []
+  )
 
   useEffect(() => {
-    fetchStats(timeframe)
-  }, [timeframe])
+    const controller = new AbortController()
+    fetchStats(timeframe, controller.signal)
+    return () => controller.abort()
+  }, [timeframe, fetchStats])
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -139,7 +183,6 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
             ))}
           </div>
 
-          {/* Sync Music Data Button */}
           {/* Sync Music Data Button (Only visible when Owner is unlocked) */}
           {isAdmin && (
             <button
@@ -175,44 +218,38 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
       </div>
 
       {/* Main Stats Content */}
-      {data && (
-        <div className="mx-auto max-w-7xl space-y-8">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {[
-              { label: 'MINUTES STREAMED', value: data.total_minutes_listened.toLocaleString(), icon: Clock },
-              { label: 'HOURS LISTENED', value: data.total_hours_listened.toLocaleString(), icon: Sparkles },
-              { label: 'UNIQUE ARTISTS', value: data.total_artists.toLocaleString(), icon: User },
-              { label: 'UNIQUE TRACKS', value: data.total_tracks.toLocaleString(), icon: Music },
-            ].map((stat, idx) => (
-              <div
-                key={idx}
-                className="rounded-2xl border border-white/15 p-4 sm:p-5 backdrop-blur-md shadow-xl"
-                style={{ backgroundColor: theme.cardBgColor }}
-              >
-                <div className="flex items-center justify-between text-[11px] sm:text-xs text-zinc-400">
-                  <span>{stat.label}</span>
-                  <stat.icon className="h-4 w-4" style={{ color: theme.primaryColor }} />
-                </div>
-                <div className="mt-2 text-2xl sm:text-3xl font-black" style={{ color: theme.secondaryColor }}>
-                  {stat.value}
-                </div>
+      <div className="mx-auto max-w-7xl space-y-8">
+        {/* KPI Summary Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[
+            { label: 'MINUTES STREAMED', value: data?.total_minutes_listened?.toLocaleString() ?? '0', icon: Clock },
+            { label: 'HOURS LISTENED', value: data?.total_hours_listened?.toLocaleString() ?? '0', icon: Sparkles },
+            { label: 'UNIQUE ARTISTS', value: data?.total_artists?.toLocaleString() ?? '0', icon: User },
+            { label: 'UNIQUE TRACKS', value: data?.total_tracks?.toLocaleString() ?? '0', icon: Music },
+          ].map((stat, idx) => (
+            <div
+              key={idx}
+              className="rounded-2xl border border-white/15 p-4 sm:p-5 backdrop-blur-md shadow-xl"
+              style={{ backgroundColor: theme.cardBgColor }}
+            >
+              <div className="flex items-center justify-between text-[11px] sm:text-xs text-zinc-400">
+                <span>{stat.label}</span>
+                <stat.icon className="h-4 w-4" style={{ color: theme.primaryColor }} />
               </div>
-            ))}
-          </div>
+              <div className="mt-2 text-2xl sm:text-3xl font-black" style={{ color: theme.secondaryColor }}>
+                {stat.value}
+              </div>
+            </div>
+          ))}
+        </div>
 
-          {!data ? (
-          <div className="flex items-center justify-center py-20 text-sm text-zinc-400">
+        {/* Loading / Telemetry Grid */}
+        {!data && loading ? (
+          <div className="flex items-center justify-center py-20 text-sm text-zinc-400 animate-pulse">
             CONNECTING TO TELEMETRY SERVER...
           </div>
-        ) : (
-          <div className={`grid ${layoutGridClass}`}>
-            {/* Top Artists, Top Albums, Top Tracks, Recent Streams grid... */}
-          </div>
-        )}
-
-          
-
-          <div className={`grid ${layoutGridClass}`}>
+        ) : data ? (
+          <div className={`grid ${layoutGridClass} transition-opacity duration-200 ${loading ? 'opacity-60' : 'opacity-100'}`}>
             {/* Top Artists */}
             <div
               className="rounded-2xl border border-white/15 p-5 sm:p-6 backdrop-blur-md"
@@ -227,8 +264,11 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
                     <div className="flex items-center gap-3 min-w-0">
                       <span className="w-5 text-xs font-bold text-zinc-400">#{i + 1}</span>
                       <img
-                        src={artist.artwork_url || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=100'}
+                        src={artist.artwork_url || DEFAULT_ARTIST_IMG}
                         alt={artist.name}
+                        onError={(e) => {
+                          e.currentTarget.src = DEFAULT_ARTIST_IMG
+                        }}
                         className="h-10 w-10 rounded-full object-cover border border-white/20"
                       />
                       <span className="truncate font-semibold text-sm">{artist.name}</span>
@@ -256,8 +296,11 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
                     <div className="flex items-center gap-3 min-w-0">
                       <span className="w-5 text-xs font-bold text-zinc-400">#{i + 1}</span>
                       <img
-                        src={album.artwork_url || 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=100'}
+                        src={album.artwork_url || DEFAULT_ALBUM_IMG}
                         alt={album.title}
+                        onError={(e) => {
+                          e.currentTarget.src = DEFAULT_ALBUM_IMG
+                        }}
                         className="h-10 w-10 rounded-lg object-cover border border-white/20"
                       />
                       <div className="min-w-0">
@@ -288,8 +331,11 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
                     <div className="flex items-center gap-3 min-w-0">
                       <span className="w-5 text-xs font-bold text-zinc-400">#{i + 1}</span>
                       <img
-                        src={track.artwork_url || 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=100'}
+                        src={track.artwork_url || DEFAULT_ALBUM_IMG}
                         alt={track.title}
+                        onError={(e) => {
+                          e.currentTarget.src = DEFAULT_ALBUM_IMG
+                        }}
                         className="h-10 w-10 rounded-lg object-cover border border-white/20"
                       />
                       <div className="min-w-0">
@@ -323,8 +369,11 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
                     className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/30 p-3"
                   >
                     <img
-                      src={s.artwork_url || 'https://images.unsplash.com/photo-1603048588665-791ca8aea617?w=100'}
+                      src={s.artwork_url || DEFAULT_ALBUM_IMG}
                       alt={s.track}
+                      onError={(e) => {
+                        e.currentTarget.src = DEFAULT_ALBUM_IMG
+                      }}
                       className="h-11 w-11 rounded-lg object-cover"
                     />
                     <div className="min-w-0 flex-1">
@@ -339,8 +388,8 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
               </div>
             </div>
           </div>
-        </div>
-      )}
+        ) : null}
+      </div>
 
       {/* Customizer Pop-up */}
       {showCustomizer && (
@@ -438,7 +487,10 @@ export default function StatsDashboard({ isAdmin = true }: StatsDashboardProps) 
       {showSyncModal && (
         <SyncWizardModal
           onClose={() => setShowSyncModal(false)}
-          onSuccess={() => fetchStats(timeframe)}
+          onSuccess={() => {
+            statsCacheRef.current = {}
+            fetchStats(timeframe, undefined, true)
+          }}
         />
       )}
 

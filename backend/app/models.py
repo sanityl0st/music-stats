@@ -4,6 +4,11 @@ from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
 
+class AppCache(Base):
+    __tablename__ = "app_caches"
+    key = Column(String, primary_key=True)
+    payload_json = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class Artist(Base):
     __tablename__ = "artists"

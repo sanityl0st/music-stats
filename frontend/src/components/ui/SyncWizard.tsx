@@ -1,6 +1,7 @@
 // frontend/src/components/ui/SyncWizardModal.tsx
 import { useState } from 'react'
 import { Upload, CheckCircle2, X, Lock, Music, Disc } from 'lucide-react'
+import { apiUrl } from '../../utils/api'
 
 export default function SyncWizardModal({
   onClose,
@@ -27,7 +28,7 @@ export default function SyncWizardModal({
       for (const file of Array.from(files)) {
         const formData = new FormData()
         formData.append('file', file)
-        const res = await fetch('/api/sync/upload', {
+        const res = await fetch(apiUrl('/api/sync/upload'), {
           method: 'POST',
           headers: { 'X-Admin-Key': adminKey },
           body: formData,

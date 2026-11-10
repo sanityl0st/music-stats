@@ -4,6 +4,7 @@ import { Text, Edges } from '@react-three/drei'
 import * as THREE from 'three'
 import { ps2Audio } from '../../utils/ps2Audio'
 import { Disc, ExternalLink, Plus, Trash2, RotateCcw, Music, Search, Link2, X } from 'lucide-react'
+import { apiUrl } from '../../utils/api'
 
 export interface PhysicalAlbum {
   id: number
@@ -284,7 +285,7 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
 
   const fetchCollection = async () => {
     try {
-      const res = await fetch('/api/collection')
+      const res = await fetch(apiUrl('/api/collection'))
       if (!res.ok) {
         setItems([])
         return
@@ -310,7 +311,7 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
     }
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/collection/search?q=${encodeURIComponent(searchQuery)}`)
+        const res = await fetch(apiUrl(`/api/collection/search?q=${encodeURIComponent(searchQuery)}`))
         if (res.ok) {
           setSuggestions(await res.json())
         }
@@ -369,7 +370,7 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
               format: newFormat,
             }
 
-      const res = await fetch('/api/collection', {
+      const res = await fetch(apiUrl('/api/collection'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -402,7 +403,7 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
 
   const handleDelete = async (id: number) => {
     ps2Audio.playCancel()
-    const res = await fetch(`/api/collection/${id}`, {
+    const res = await fetch(apiUrl(`/api/collection/${id}`), {
       method: 'DELETE',
       headers: {
         'X-Admin-Key': localStorage.getItem('admin_key') || '',

@@ -4,6 +4,7 @@ import StatsDashboard from './components/ui/StatsDashboard'
 import PS2ShelfView from './components/canvas/PS2ShelfView'
 import { useThemeStore } from './store/useThemeStore'
 import { BarChart3, Disc, Eye, EyeOff, Lock, Unlock } from 'lucide-react'
+import { apiUrl } from './utils/api'
 
 export default function App() {
   const [activePage, setActivePage] = useState<'stats' | 'shelf'>('stats')
@@ -21,7 +22,7 @@ export default function App() {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 8000) // 8 second timeout
 
-      const res = await fetch('/api/auth/verify', {
+      const res = await fetch(apiUrl('/api/auth/verify'), {
         headers: { 'X-Admin-Key': keyToTest },
         signal: controller.signal,
       })
