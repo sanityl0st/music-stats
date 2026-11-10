@@ -78,6 +78,15 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+from decimal import Decimal
+
+def serialize_stats(data: dict) -> str:
+    """Recursively converts Decimals to floats/ints so json.dumps never fails on Postgres."""
+    def default_encoder(obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+    return json.dumps(data, default=default_encoder)
 
 def ensure_performance_indexes():
     """Creates SQL indexes on SQLite/Postgres tables so 60k+ row aggregations run in milliseconds."""
@@ -339,7 +348,7 @@ def refresh_all_stats_caches_sync():
     try:
         for tf in ("all", "month", "week"):
             data = compute_overview_stats(tf, db)
-            db.merge(AppCache(key=f"stats_overview_{tf}", payload_json=json.dumps(data), updated_at=datetime.utcnow()))
+            db.merge(AppCache(key=f"stats_overview_{tf}", payload_json=serialize_stats(data), updated_at=datetime.utcnow()))
             db.commit()
     except Exception as e:
         db.rollback()
@@ -446,7 +455,7 @@ def get_stats_overview(
 
     # First-load fallback: compute requested timeframe immediately, then warm the other two in background
     data = compute_overview_stats(tf_str, db)
-    db.merge(AppCache(key=cache_key, payload_json=json.dumps(data), updated_at=datetime.utcnow()))
+    db.merge(AppCache(key=cache_key, payload_json=serialize_stats(data), updated_at=datetime.utcnow()))
     db.commit()
     background_tasks.add_task(refresh_all_stats_caches_sync)
     return data
