@@ -25,7 +25,6 @@ interface CatalogSuggestion {
   release_year: string
 }
 
-
 const ITEMS_PER_ROW = 12
 const ROW_VERTICAL_GAP = 2.4
 const SPINE_HORIZONTAL_GAP = 0.44
@@ -263,7 +262,7 @@ function ShelfEnvironment({
 export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) {
   const [items, setItems] = useState<PhysicalAlbum[]>([])
   const [selectedItem, setSelectedItem] = useState<PhysicalAlbum | null>(null)
-  const [sortBy, setSortBy] = useState<'ALPHA' | 'FORMAT'>('ALPHA')
+  const [sortBy, setSortBy] = useState<'ARTIST' | 'TITLE' | 'FORMAT'>('ARTIST')
   const [filterFormat, setFilterFormat] = useState<'ALL' | 'VINYL' | 'CD' | 'CASSETTE'>('ALL')
   const [scrollOffset, setScrollOffset] = useState(0)
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
@@ -297,8 +296,6 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
     }
   }
 
-  
-
   useEffect(() => {
     fetchCollection()
   }, [])
@@ -326,11 +323,31 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
     const safeItems = Array.isArray(items) ? items : []
     return safeItems
       .filter((i) => filterFormat === 'ALL' || i.format === filterFormat)
+      .slice()
       .sort((a, b) => {
-        if (sortBy === 'FORMAT') {
-          return a.format.localeCompare(b.format) || a.title.localeCompare(b.title)
+        const artistA = a.artist || ''
+        const artistB = b.artist || ''
+        const titleA = a.title || ''
+        const titleB = b.title || ''
+
+        if (sortBy === 'ARTIST') {
+          return (
+            artistA.localeCompare(artistB, undefined, { sensitivity: 'base' }) ||
+            titleA.localeCompare(titleB, undefined, { sensitivity: 'base' })
+          )
         }
-        return a.title.localeCompare(b.title)
+        if (sortBy === 'FORMAT') {
+          return (
+            a.format.localeCompare(b.format) ||
+            artistA.localeCompare(artistB, undefined, { sensitivity: 'base' }) ||
+            titleA.localeCompare(titleB, undefined, { sensitivity: 'base' })
+          )
+        }
+        // 'TITLE' (Album A-Z)
+        return (
+          titleA.localeCompare(titleB, undefined, { sensitivity: 'base' }) ||
+          artistA.localeCompare(artistB, undefined, { sensitivity: 'base' })
+        )
       })
   }, [items, sortBy, filterFormat])
 
@@ -444,6 +461,7 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs">
+          {/* Format Filter Bar */}
           <div className="flex items-center border border-emerald-800 bg-black/90 p-0.5">
             {(['ALL', 'VINYL', 'CD', 'CASSETTE'] as const).map((fmt) => (
               <button
@@ -462,15 +480,31 @@ export default function PS2ShelfView({ isAdmin = true }: { isAdmin?: boolean }) 
             ))}
           </div>
 
-          <button
-            onClick={() => {
-              ps2Audio.playHover()
-              setSortBy((s) => (s === 'ALPHA' ? 'FORMAT' : 'ALPHA'))
-            }}
-            className="border border-emerald-700 bg-black/90 px-2.5 py-1 text-emerald-300 hover:bg-emerald-900/50"
-          >
-            {sortBy === 'ALPHA' ? 'A-Z' : 'FMT'}
-          </button>
+          {/* Sort Mode Selector (Artist A-Z / Album A-Z / Format) */}
+          <div className="flex items-center border border-emerald-800 bg-black/90 p-0.5">
+            <span className="px-1.5 text-[10px] text-emerald-600 hidden sm:inline">SORT:</span>
+            {(
+              [
+                ['ARTIST', 'ARTIST'],
+                ['TITLE', 'ALBUM'],
+                ['FORMAT', 'FMT'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => {
+                  ps2Audio.playHover()
+                  setSortBy(key)
+                  setScrollOffset(0)
+                }}
+                className={`px-2 py-1 transition ${
+                  sortBy === key ? 'bg-emerald-700 text-black font-bold' : 'text-emerald-400 hover:bg-emerald-950'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
           {isAdmin && (
             <button

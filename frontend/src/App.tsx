@@ -98,8 +98,7 @@ export default function App() {
       {!zenMode && (
         <nav className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-white/10 bg-black/70 px-4 sm:px-6 backdrop-blur-xl">
           <div className="flex items-center gap-2 font-black tracking-wider text-base sm:text-lg">
-            <Disc className="h-6 w-6 animate-spin" style={{ color: primaryColor, animationDuration: '8s' }} />
-            <span>ASTRAL // WAX</span>
+            <span>Stevie's Moosic</span>
           </div>
 
           <div className="flex items-center gap-2">

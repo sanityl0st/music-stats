@@ -451,6 +451,7 @@ def get_stats_overview(
 @app.get("/api/collection")
 def get_physical_collection(
     background_tasks: BackgroundTasks,
+    sort_by: str = "artist",
     db: Session = Depends(get_db),
 ):
     """
@@ -460,6 +461,31 @@ def get_physical_collection(
     cached_all = db.query(AppCache).filter(AppCache.key == "stats_overview_all").first()
     if not cached_all or (datetime.utcnow() - (cached_all.updated_at or datetime.utcnow())).total_seconds() > 120:
         background_tasks.add_task(refresh_all_stats_caches_sync)
+        
+    query = db.query(PhysicalItem)
+    
+    if sort_by == "title":
+        query = query.order_by(func.lower(PhysicalItem.title).asc(), func.lower(PhysicalItem.artist).asc())
+    elif sort_by == "format":
+        query = query.order_by(PhysicalItem.format.asc(), func.lower(PhysicalItem.artist).asc(), func.lower(PhysicalItem.title).asc())
+    else:
+        # Default: Sort alphabetically by Artist (A-Z), then Album Title (A-Z)
+        query = query.order_by(func.lower(PhysicalItem.artist).asc(), func.lower(PhysicalItem.title).asc())
+
+    items = query.all()
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "artist": item.artist,
+            "format": item.format,
+            "artwork_url": item.artwork_url,
+            "apple_music_url": item.apple_music_url,
+            "spotify_url": item.spotify_url,
+            "tracks": json.loads(item.tracklist_json or "[]"),
+        }
+        for item in items
+    ]
 
     items = db.query(PhysicalItem).order_by(PhysicalItem.title.asc()).all()
     return [
