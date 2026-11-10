@@ -14,7 +14,7 @@ export default function App() {
   const [passphraseInput, setPassphraseInput] = useState('')
   const [authError, setAuthError] = useState('')
 
-  const { backgroundMode, customPhotoUrl, primaryColor } = useThemeStore()
+  const { backgroundMode, customPhotoUrl } = useThemeStore()
 
   // Check if we already have a valid admin_key saved in this browser
   const verifyStoredKey = async (keyToTest: string) => {
