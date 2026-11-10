@@ -66,7 +66,11 @@ app = FastAPI(title="Vinyl Stats API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", os.getenv("FRONTEND_URL", "*")],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://music-stats-six.vercel.app/",  # <--- Add your exact Vercel frontend URL here
+        os.getenv("FRONTEND_URL", "*")
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
