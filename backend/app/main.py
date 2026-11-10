@@ -541,3 +541,11 @@ def delete_physical_item(item_id: int, db: Session = Depends(get_db)):
     db.delete(item)
     db.commit()
     return {"status": "deleted"}
+
+@app.get("/api/health")
+def health_check(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Keeps both Render AND Neon Postgres compute awake, and ensures cache is warm."""
+    cached = db.query(AppCache.updated_at).filter(AppCache.key == "stats_overview_all").first()
+    if not cached:
+        background_tasks.add_task(refresh_all_stats_caches_sync)
+    return {"status": "ok", "cache_warm": bool(cached)}
