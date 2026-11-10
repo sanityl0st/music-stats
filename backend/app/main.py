@@ -69,6 +69,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "https://music-stats-six.vercel.app/",  # <--- Add your exact Vercel frontend URL here
+        "https://music-stats-6cch.onrender.com",
         os.getenv("FRONTEND_URL", "*")
     ],
     allow_credentials=True,
